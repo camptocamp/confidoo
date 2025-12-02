@@ -1,6 +1,6 @@
 """Apply parsed configuration to Odoo database."""
 
-from typing import Any, Optional
+from typing import Any
 
 from .parser import ParsedConfig
 
@@ -16,7 +16,7 @@ def apply_config(
         config: Parsed configuration from parse_config().
         env: Odoo environment (odoo.api.Environment).
         raise_on_error: If True, raise exceptions on errors.
-            If False, log warnings and continue.
+            If False, silently skip errors and continue.
 
     Raises:
         ValueError: If a model, record, or field is not found and raise_on_error is True.

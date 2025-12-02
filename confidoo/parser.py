@@ -10,7 +10,7 @@ The configuration file uses an INI-style format with specific section types:
 import configparser
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # Section type patterns
 MODEL_PATTERN = re.compile(r"^model:(.+)$")
