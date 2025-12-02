@@ -1,0 +1,2 @@
+# confidoo
+Declarative Odoo configuration
