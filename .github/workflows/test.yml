@@ -1,0 +1,40 @@
+name: tests
+
+on: [pull_request, push]
+
+jobs:
+  test:
+    name: Test (python=${{ matrix.python-version }}, odoo=${{ matrix.odoo-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - odoo-version: "16.0"
+            python-version: "3.11"
+          - odoo-version: "17.0"
+            python-version: "3.12"
+          - odoo-version: "18.0"
+            python-version: "3.13"
+          - odoo-version: "19.0"
+            python-version: "3.14"
+    env:
+      ODOO_VERSION: ${{ matrix.odoo-version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv and set the Python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install the project
+        run: uv sync --locked --dev --extra test
+      - name: Run tests
+        run: uv run pytest --verbose --cov-report=lcov:coverage/lcov.info --cov-fail-under=90
+      - name: Code Coverage Annotation
+        uses: ggilder/codecoverage@v1
+        if: strategy.job-index == 0
+        with:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          COVERAGE_FILE_PATH: "./coverage/lcov.info"
+          COVERAGE_FORMAT: "lcov"

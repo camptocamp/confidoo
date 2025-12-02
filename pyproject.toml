@@ -1,0 +1,80 @@
+[project]
+name = "confidoo"
+version = "0.1.0"
+description = "Declarative configuration for Odoo"
+keywords = ["odoo", "server-environment", "configuration"]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+dependencies = [
+  "typer",
+]
+
+[project.urls]
+homepage = "https://github.com/camptocamp/confidoo"
+documentation = "https://github.com/camptocamp/confidoo"
+repository = "https://github.com/camptocamp/confidoo"
+
+[project.scripts]
+confidoo = "confidoo.cli:app"
+
+[project.optional-dependencies]
+test = [
+  "coverage",
+  "pytest",
+  "pytest-cov",
+  "pytest-docker",
+  "psycopg2-binary>=2.9.5",
+]
+
+# PostgreSQL adapter options - install one of these
+psycopg2 = [
+  # Source version (requires PostgreSQL dev libs)
+  "psycopg2>=2.9.5",
+]
+psycopg2-binary = [
+  # Binary version (easier, works everywhere)
+  "psycopg2-binary>=2.9.5",
+]
+
+[dependency-groups]
+dev = [
+  "psycopg2-binary>=2.9.5",
+]
+
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+  "F",        # pyflakes
+  "E",        # pycodestyle (errors)
+  "W",        # pycodestyle (warnings)
+  "C90",      # mccabe
+  "I",        # isort
+  "UP",       # pyupgrade
+  "B",        # flake8-bugbear
+  "Q",        # flake8-quotes
+  "PTH",      # flake8-use-pathlib
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 16
+
+[tool.coverage.run]
+source = ["confidoo"]
+omit = [
+    "confidoo/__main__.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=confidoo --cov-report=term-missing:skip-covered"
