@@ -12,75 +12,146 @@ Confidoo applies declarative config to Odoo databases — syncing models, record
 
 Install with [uv](https://docs.astral.sh/uv/) (recommended):
 
-    uv tool install git+https://github.com/camptocamp/confidoo
+```bash
+uv tool install git+https://github.com/camptocamp/confidoo
+```
 
-Install with [pipx](https://pypa.github.io/pipx/):
+Or with [pipx](https://pypa.github.io/pipx/):
 
-    pipx install git+https://github.com/camptocamp/confidoo
+```bash
+pipx install git+https://github.com/camptocamp/confidoo
+```
 
+## Quick Start
+
+```bash
+# Apply configuration from file
+confidoo apply config.ini \
+  --database mydb \
+  --db-user odoo \
+  --db-password secret
+
+# Or use environment variables
+export PGDATABASE=mydb PGUSER=odoo PGPASSWORD=secret
+confidoo apply config.ini
+
+# Or pipe configuration
+cat config.ini | confidoo apply -d mydb -u odoo -p secret
+```
 
 ## Usage
 
-To apply a configuration, run:
+### Database Connection
 
-    confidoo apply /path/to/config.ini
+Database credentials can be provided via CLI options or PostgreSQL environment variables:
 
-Alternatively, the configuration can be piped in:
+**CLI Options:**
+- `--database` / `-d` (or `PGDATABASE`)
+- `--db-user` / `-u` (or `PGUSER`)
+- `--db-password` / `-p` (or `PGPASSWORD`)
+- `--db-host` / `-h` (or `PGHOST`, default: `localhost`)
+- `--db-port` / `-P` (or `PGPORT`, default: `5432`)
 
-    confidoo apply < /path/to/config.ini
-
-Or..
-
-    echo $CONFIDOO_CONFIG | confidoo apply
-
-
-## Configuration
-
-The configuration is an INI format file that defines the models, records, and system parameters to sync.
-
-Sections are used to group settings by model, record, or system parameter.
-
-### Example
-
-```ini
-# Model-wide settings (all records of this model)
-# Section Syntax: [model:model_name]
-[model:ir.mail_server]
-smtp_port = 22
-smtp_user = username
-
-# Record settings using xml-id
-# Section Syntax: [record:xml_id]
-[record:customer_module.sftp_server]
-sftp_port = 9999
-sftp_user = username
-
-# Additionally, config parameters can be set with
-[config:set_param]
-param.key = value1
-another.parameter = value2
+**Debug Mode:**
+```bash
+confidoo --debug apply config.ini
 ```
+
+### Input Methods
+
+Configuration can be provided in three ways:
+
+```bash
+# File argument
+confidoo apply config.ini
+
+# Pipe from stdin
+confidoo apply < config.ini
+
+# Environment variable
+echo $CONFIDOO_CONFIG | confidoo apply
+```
+
+## Configuration Format
+
+Configuration files use INI format with three section types:
 
 ### Model-wide Settings
 
-Model-wide settings are applied to all records of the model.
-
-The table name will be guessed from the model name, by replacing `.` with `_`. However, if the model uses a custom table name, it can be specified with a `_table` attribute.
+Apply settings to **all records** of a model:
 
 ```ini
-[model:custom.module.model]
-_table = custom_table
+[model:ir.cron]
+active = False
 
-some_column = value1
+[model:ir.mail_server]
+smtp_port = 587
+smtp_user = admin@example.com
+```
+
+**Custom table name:**
+```ini
+[model:custom.module.model]
+_table = custom_table_name
+some_column = value
 ```
 
 ### Record Settings
 
-Record settings are applied to a specific record, matched by its xml-id.
+Apply settings to a **specific record** by XML ID:
 
-Similarly to the model-wide settings, the table name will be guessed from the model name, by replacing `.` with `_`. However, if the model uses a custom table name, it can be specified with a `_table` attribute.
+```ini
+[record:base.partner_admin]
+name = "Admin User"
+email = "admin@example.com"
 
-### System Parameter Settings
+[record:base.user_admin]
+active = True
+```
 
-System parameter settings are applied to a specific system parameter, matched by its key.
-The config parameter will be created or updated with the given value.
+**Custom table name:**
+```ini
+[record:my_module.custom_record]
+_table = custom_table
+field_name = value
+```
+
+### System Parameters
+
+Create or update system parameters:
+
+```ini
+[config:set_param]
+ribbon.name = "Production"
+database.uuid = "1234-5678-9012-3456"
+web.base.url = "https://example.com"
+```
+
+**Unset parameters** (remove by leaving value empty):
+```ini
+[config:set_param]
+database.expiration_reason =
+database.expiration_date =
+```
+
+## Complete Example
+
+```ini
+# Disable all scheduled actions
+[model:ir.cron]
+active = False
+
+# Update specific partner
+[record:base.partner_admin]
+name = "Confidoo Admin"
+email = "admin@confidoo.com"
+
+# Set system parameters
+[config:set_param]
+ribbon.name = "Test Environment"
+database.uuid = "0000-0000-0000-0000"
+
+# Remove expiration settings
+database.expiration_reason =
+database.expiration_date =
+```
