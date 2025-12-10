@@ -1,5 +1,9 @@
 # Confidoo
 
+[![tests](https://github.com/camptocamp/confidoo/actions/workflows/test.yml/badge.svg)](https://github.com/camptocamp/confidoo/actions/workflows/test.yml)
+[![pre-commit](https://github.com/camptocamp/confidoo/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/camptocamp/confidoo/actions/workflows/pre-commit.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Declarative Odoo configuration
 
 Confidoo applies declarative config to Odoo databases — syncing models, records, and system parameters into the correct state for each environment automatically.
