@@ -31,16 +31,19 @@ psycopg2-binary = [
 ]
 
 [dependency-groups]
+run = [
+  "psycopg2-binary>=2.9.5",
+]
 test = [
+  { include-group = "run" },
   "coverage",
   "pytest",
   "pytest-cov",
   "pytest-docker",
-  "psycopg2-binary>=2.9.5",
+  "pytest-ty",
 ]
 dev = [
   { include-group = "test" },
-  "psycopg2-binary>=2.9.5",
   "prek",
 ]
 
@@ -79,4 +82,4 @@ exclude_also = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=confidoo --cov-report=term-missing:skip-covered"
+addopts = "--ty --cov=confidoo --cov-report=term-missing:skip-covered"
