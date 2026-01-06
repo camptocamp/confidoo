@@ -12,10 +12,11 @@ on:
 
 jobs:
   pre-commit:
+    name: prek
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: 3.14
-      - uses: pre-commit/action@v3.0.1
+      - name: Install uv and set the Python version
+        uses: astral-sh/setup-uv@v7
+      - name: Run prek / pre-commit
+        run: uvx prek --show-diff-on-failure --all-files
