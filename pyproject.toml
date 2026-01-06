@@ -26,6 +26,9 @@ test = [
   "pytest-docker",
   "psycopg2-binary>=2.9.5",
 ]
+dev = [
+  "prek",
+]
 
 # PostgreSQL adapter options - install one of these
 psycopg2 = [
