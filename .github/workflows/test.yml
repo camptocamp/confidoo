@@ -28,7 +28,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - name: Install the project
-        run: uv sync --locked --dev --extra test
+        run: uv sync --locked --dev
       - name: Run tests
         run: uv run pytest --verbose --cov-report=lcov:coverage/lcov.info --cov-fail-under=90
       - name: Code Coverage Annotation

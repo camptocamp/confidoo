@@ -40,14 +40,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "prek" },
-]
 psycopg2 = [
     { name = "psycopg2" },
 ]
 psycopg2-binary = [
     { name = "psycopg2-binary" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "prek" },
+    { name = "psycopg2-binary" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-docker" },
 ]
 test = [
     { name = "coverage" },
@@ -57,26 +64,29 @@ test = [
     { name = "pytest-docker" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "psycopg2-binary" },
-]
-
 [package.metadata]
 requires-dist = [
-    { name = "coverage", marker = "extra == 'test'" },
-    { name = "prek", marker = "extra == 'dev'" },
     { name = "psycopg2", marker = "extra == 'psycopg2'", specifier = ">=2.9.5" },
     { name = "psycopg2-binary", marker = "extra == 'psycopg2-binary'", specifier = ">=2.9.5" },
-    { name = "psycopg2-binary", marker = "extra == 'test'", specifier = ">=2.9.5" },
-    { name = "pytest", marker = "extra == 'test'" },
-    { name = "pytest-cov", marker = "extra == 'test'" },
-    { name = "pytest-docker", marker = "extra == 'test'" },
     { name = "typer" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "psycopg2-binary", specifier = ">=2.9.5" }]
+dev = [
+    { name = "coverage" },
+    { name = "prek" },
+    { name = "psycopg2-binary", specifier = ">=2.9.5" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-docker" },
+]
+test = [
+    { name = "coverage" },
+    { name = "psycopg2-binary", specifier = ">=2.9.5" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-docker" },
+]
 
 [[package]]
 name = "coverage"

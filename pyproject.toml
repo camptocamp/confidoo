@@ -19,16 +19,6 @@ repository = "https://github.com/camptocamp/confidoo"
 confidoo = "confidoo.cli:app"
 
 [project.optional-dependencies]
-test = [
-  "coverage",
-  "pytest",
-  "pytest-cov",
-  "pytest-docker",
-  "psycopg2-binary>=2.9.5",
-]
-dev = [
-  "prek",
-]
 
 # PostgreSQL adapter options - install one of these
 psycopg2 = [
@@ -41,8 +31,17 @@ psycopg2-binary = [
 ]
 
 [dependency-groups]
-dev = [
+test = [
+  "coverage",
+  "pytest",
+  "pytest-cov",
+  "pytest-docker",
   "psycopg2-binary>=2.9.5",
+]
+dev = [
+  { include-group = "test" },
+  "psycopg2-binary>=2.9.5",
+  "prek",
 ]
 
 [build-system]
