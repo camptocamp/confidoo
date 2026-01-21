@@ -3,6 +3,7 @@
 [![tests](https://github.com/camptocamp/confidoo/actions/workflows/test.yml/badge.svg)](https://github.com/camptocamp/confidoo/actions/workflows/test.yml)
 [![prek](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/j178/prek/master/docs/assets/badge-v0.json)](https://github.com/j178/prek)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![ty](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ty/main/assets/badge/v0.json)](https://github.com/astral-sh/ty)
 
 Declarative Odoo configuration
 
