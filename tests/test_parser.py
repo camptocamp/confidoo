@@ -347,8 +347,8 @@ class TestComplexScenarios:
 
             # Additionally, config parameters can be set with system parameter syntax
             [config:set_param]
-            ribbon.name = "Test"
-            database.uuid = "0000-0000-0000-0000"
+            ribbon.name = Test
+            database.uuid = 0000-0000-0000-0000
 
             # And even removed/unset
             database.expiration_reason =
@@ -374,23 +374,23 @@ class TestComplexScenarios:
         config_operation = config.operations[2]
         assert isinstance(config_operation, ConfigParamOperation)
         assert config_operation.identifier == "set_param"
-        assert config_operation.fields["ribbon.name"] == '"Test"'
-        assert config_operation.fields["database.uuid"] == '"0000-0000-0000-0000"'
+        assert config_operation.fields["ribbon.name"] == "Test"
+        assert config_operation.fields["database.uuid"] == "0000-0000-0000-0000"
         assert config_operation.fields["database.expiration_reason"] is None
         assert config_operation.fields["database.expiration_date"] is None
 
-    def test_mixed_quoted_values(self):
-        """Test handling of quoted and unquoted values."""
+    def test_mixed_values(self):
+        """Test handling of mixed values."""
         config_text = textwrap.dedent(
             """
             [config:set_param]
-            quoted = "value with spaces"
-            unquoted = value_no_spaces
+            spaces = value with spaces
+            simple = value_no_spaces
             number = 123
         """
         )
         config = parse_config(config_text)
         operation = config.operations[0]
-        assert operation.fields["quoted"] == '"value with spaces"'
-        assert operation.fields["unquoted"] == "value_no_spaces"
+        assert operation.fields["spaces"] == "value with spaces"
+        assert operation.fields["simple"] == "value_no_spaces"
         assert operation.fields["number"] == "123"

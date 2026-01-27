@@ -103,8 +103,8 @@ Apply settings to a **specific record** by XML ID:
 
 ```ini
 [record:base.partner_admin]
-name = "Admin User"
-email = "admin@example.com"
+name = Admin User
+email = admin@example.com
 
 [record:base.user_admin]
 active = True
@@ -123,9 +123,9 @@ Create or update system parameters:
 
 ```ini
 [config:set_param]
-ribbon.name = "Production"
-database.uuid = "1234-5678-9012-3456"
-web.base.url = "https://example.com"
+ribbon.name = Production
+database.uuid = 1234-5678-9012-3456
+web.base.url = https://example.com
 ```
 
 **Unset parameters** (remove by leaving value empty):
@@ -144,13 +144,13 @@ active = False
 
 # Update specific partner
 [record:base.partner_admin]
-name = "Confidoo Admin"
-email = "admin@confidoo.com"
+name = Confidoo Admin
+email = admin@confidoo.com
 
 # Set system parameters
 [config:set_param]
-ribbon.name = "Test Environment"
-database.uuid = "0000-0000-0000-0000"
+ribbon.name = Test Environment
+database.uuid = 0000-0000-0000-0000
 
 # Remove expiration settings
 database.expiration_reason =
