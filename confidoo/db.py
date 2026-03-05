@@ -258,7 +258,7 @@ class OdooDatabase:
     def advisory_lock(self, name: str):
         """Acquire a PostgreSQL advisory lock for the current transaction.
 
-        Converts the name to a stable integer lock ID using SHA-1 hashing.
+        Converts the name to a stable integer lock ID using SHA-256 hashing.
         Blocks until the lock is available, preventing concurrent runs with the
         same lock name on the same database.  The lock is automatically released
         when the surrounding transaction commits or rolls back.
@@ -274,8 +274,10 @@ class OdooDatabase:
             ...     # exclusive section
             ...     pass
         """
-        h = hashlib.sha1()
+        h = hashlib.sha256()
         h.update(name.encode("utf-8"))
+        # Use 14 hex chars (56 bits) to stay well within PostgreSQL bigint's
+        # positive range (max 2^63-1 for a signed 64-bit integer).
         lock_id = int(h.hexdigest()[:14], 16)
         self.cr.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (lock_id,))
         yield
