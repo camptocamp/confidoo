@@ -208,6 +208,9 @@ class Confidoo:
     def apply(self) -> None:
         """Apply loaded configuration to the database.
 
+        Acquires a PostgreSQL advisory lock named after the target database to
+        prevent concurrent runs from interfering with each other.
+
         Must be called within the context of connect().
 
         Raises:
@@ -215,9 +218,11 @@ class Confidoo:
             RuntimeError: If called outside connect() context
             DatabaseError: If database operations fail
         """
-        # Apply all operations in order
-        for operation in self.config:
-            self._apply_operation(operation)
+        lock_name = f"confidoo/{self._conn_params.database}"
+        with self.db.advisory_lock(lock_name):
+            # Apply all operations in order
+            for operation in self.config:
+                self._apply_operation(operation)
 
     def _apply_operation(self, operation: ConfigOperation) -> None:
         """Apply a single operation to the database.

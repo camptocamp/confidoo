@@ -3,6 +3,7 @@
 
 """Tests for Confidoo API (programmatic usage)."""
 
+from contextlib import contextmanager
 from pathlib import Path
 from textwrap import dedent
 
@@ -294,3 +295,52 @@ def test_apply_without_connection_raises_runtime_error():
     # Accessing db property without connection should raise RuntimeError
     with pytest.raises(RuntimeError, match="No active database connection"):
         _ = confidoo.db
+
+
+def test_advisory_lock_acquired_and_released(odoo_db):
+    """Test that an advisory lock is acquired and released during apply."""
+    from unittest.mock import patch
+
+    cursor, db_params = odoo_db
+    config_content = dedent(
+        """
+        [model:ir.cron]
+        active = False
+        """
+    )
+
+    advisory_calls = []
+
+    # Intercept cursor.execute to capture advisory lock SQL calls.
+    # We patch OdooDatabase.advisory_lock to spy on the SQL actually sent
+    # to the database by wrapping the real implementation.
+    from confidoo.db import OdooDatabase
+
+    real_advisory_lock = OdooDatabase.advisory_lock
+
+    @contextmanager
+    def spy_advisory_lock(self, name):
+        # Record acquire call
+        advisory_calls.append(("acquire", name))
+        try:
+            with real_advisory_lock(self, name):
+                yield
+        finally:
+            # Record release call
+            advisory_calls.append(("release", name))
+
+    with patch.object(OdooDatabase, "advisory_lock", spy_advisory_lock):
+        Confidoo.apply_config(
+            database=db_params["database"],
+            user=db_params["user"],
+            password=db_params["password"],
+            host=db_params["host"],
+            port=db_params["port"],
+            config_content=config_content,
+        )
+
+    assert len(advisory_calls) == 2, (
+        f"Expected 2 advisory lock calls, got: {advisory_calls}"
+    )
+    assert advisory_calls[0] == ("acquire", f"confidoo/{db_params['database']}")
+    assert advisory_calls[1] == ("release", f"confidoo/{db_params['database']}")

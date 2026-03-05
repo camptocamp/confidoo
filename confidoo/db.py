@@ -9,7 +9,9 @@ and Odoo-specific utility methods.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -251,6 +253,32 @@ class OdooDatabase:
         except (ValueError, IndexError) as e:
             msg = f"Invalid version format: {version_str}"
             raise OdooVersionError(msg) from e
+
+    @contextmanager
+    def advisory_lock(self, name: str):
+        """Acquire a PostgreSQL advisory lock for the current transaction.
+
+        Converts the name to a stable integer lock ID using SHA-1 hashing.
+        Blocks until the lock is available, preventing concurrent runs with the
+        same lock name on the same database.  The lock is automatically released
+        when the surrounding transaction commits or rolls back.
+
+        Args:
+            name: Human-readable lock name (e.g. "confidoo/mydb")
+
+        Yields:
+            None
+
+        Example:
+            >>> with db.advisory_lock("confidoo/mydb"):
+            ...     # exclusive section
+            ...     pass
+        """
+        h = hashlib.sha1()
+        h.update(name.encode("utf-8"))
+        lock_id = int(h.hexdigest()[:14], 16)
+        self.cr.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (lock_id,))
+        yield
 
     def resolve_xmlid(self, xmlid: str) -> tuple[str, int]:
         """Resolve XMLID to (model, res_id).
