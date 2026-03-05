@@ -3,7 +3,6 @@
 
 """Tests for Confidoo API (programmatic usage)."""
 
-from contextlib import contextmanager
 from pathlib import Path
 from textwrap import dedent
 
@@ -297,50 +296,177 @@ def test_apply_without_connection_raises_runtime_error():
         _ = confidoo.db
 
 
-def test_advisory_lock_acquired_and_released(odoo_db):
-    """Test that an advisory lock is acquired and released during apply."""
+def test_advisory_lock_prevents_concurrent_apply(db_params, real_db_connect):
+    """Session A acquires the lock and applies its config; session B waits.
+
+    This verifies that concurrent Confidoo callers serialize correctly:
+    - Session A (thread) acquires the advisory lock and begins applying.
+    - Session B (thread) calls apply_config() and is blocked while A holds the lock.
+    - After A commits and releases the lock, B proceeds and applies its config.
+    - The database state reflects both applies, each applied exactly once and
+      without any concurrent interleaving.
+    """
+    import threading
+    import time
     from unittest.mock import patch
 
-    cursor, db_params = odoo_db
-    config_content = dedent(
-        """
-        [model:ir.cron]
-        active = False
-        """
+    # How long to wait for threads and events to complete/occur.
+    THREAD_TIMEOUT = 10
+    # How long to wait after starting B before asserting it is blocked.
+    # A single pg_advisory_xact_lock call over a local TCP connection takes
+    # well under 100 ms, so 2 seconds is more than enough margin for CI.
+    BLOCK_SETTLE_SECONDS = 2
+
+    PARAM_A = "confidoo.test.session_a"
+    PARAM_B = "confidoo.test.session_b"
+
+    config_a = dedent(f"""
+        [config:set_param]
+        {PARAM_A} = set_by_a
+    """)
+    config_b = dedent(f"""
+        [config:set_param]
+        {PARAM_B} = set_by_b
+    """)
+
+    # Delete any leftover keys from previous test runs.
+    cleanup_conn = real_db_connect(**db_params)
+    cleanup_cr = cleanup_conn.cursor()
+    cleanup_cr.execute(
+        "DELETE FROM ir_config_parameter WHERE key = ANY(%s)",
+        ([PARAM_A, PARAM_B],),
     )
+    cleanup_conn.commit()
+    cleanup_cr.close()
+    cleanup_conn.close()
 
-    advisory_calls = []
+    # Create session A's Confidoo instance and inject a delay *inside* the
+    # locked section so session B is guaranteed to block.
+    instance_a = Confidoo(
+        database=db_params["database"],
+        user=db_params["user"],
+        password=db_params["password"],
+        host=db_params["host"],
+        port=db_params["port"],
+        config_content=config_a,
+    )
+    original_apply_op = instance_a._apply_operation
+    op_started = threading.Event()
+    op_can_continue = threading.Event()
 
-    # Intercept cursor.execute to capture advisory lock SQL calls.
-    # We patch OdooDatabase.advisory_lock to spy on the SQL actually sent
-    # to the database by wrapping the real implementation.
-    from confidoo.db import OdooDatabase
+    def slow_apply_op(operation):
+        # Signal the main thread that we are inside the locked section.
+        op_started.set()
+        # Block until the main thread tells us to proceed.
+        op_can_continue.wait(timeout=THREAD_TIMEOUT)
+        return original_apply_op(operation)
 
-    real_advisory_lock = OdooDatabase.advisory_lock
+    # Patch the instance (not the class) so only session A is slowed down.
+    instance_a._apply_operation = slow_apply_op
 
-    @contextmanager
-    def spy_advisory_lock(self, name):
-        # Record acquire call
-        advisory_calls.append(("acquire", name))
+    a_finished = threading.Event()
+    b_finished = threading.Event()
+    a_errors: list = []
+    b_errors: list = []
+
+    def run_session_a():
         try:
-            with real_advisory_lock(self, name):
-                yield
+            with instance_a.connect():
+                instance_a.apply()
+        except Exception as exc:
+            a_errors.append(exc)
         finally:
-            # Record release call
-            advisory_calls.append(("release", name))
+            a_finished.set()
 
-    with patch.object(OdooDatabase, "advisory_lock", spy_advisory_lock):
-        Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
-            config_content=config_content,
+    def run_session_b():
+        try:
+            Confidoo.apply_config(
+                database=db_params["database"],
+                user=db_params["user"],
+                password=db_params["password"],
+                host=db_params["host"],
+                port=db_params["port"],
+                config_content=config_b,
+            )
+        except Exception as exc:
+            b_errors.append(exc)
+        finally:
+            b_finished.set()
+
+    # Both threads must run while psycopg2.connect is the *real* function
+    # (the odoo_db fixture may have replaced it with a shared-connection mock).
+    with patch("psycopg2.connect", real_db_connect):
+        # Start A and wait until it has the lock and is inside slow_apply_op.
+        thread_a = threading.Thread(target=run_session_a, daemon=True)
+        thread_a.start()
+        assert op_started.wait(timeout=THREAD_TIMEOUT), (
+            "Session A never entered the locked section"
         )
 
-    assert len(advisory_calls) == 2, (
-        f"Expected 2 advisory lock calls, got: {advisory_calls}"
+        # Now start B — it will try to acquire the same advisory lock and block.
+        thread_b = threading.Thread(target=run_session_b, daemon=True)
+        thread_b.start()
+        # Allow B enough time to connect and attempt pg_advisory_xact_lock.
+        time.sleep(BLOCK_SETTLE_SECONDS)
+
+        # Session B must still be blocked (A holds the lock).
+        assert not b_finished.is_set(), (
+            "Session B should be blocked waiting for A's advisory lock"
+        )
+        # Session A is still in progress (inside the slow operation).
+        assert not a_finished.is_set(), "Session A should still be running"
+
+        # Check that B has not written anything to the database yet.
+        check_conn = real_db_connect(**db_params)
+        check_cr = check_conn.cursor()
+        check_cr.execute(
+            "SELECT value FROM ir_config_parameter WHERE key = %s", (PARAM_B,)
+        )
+        assert check_cr.fetchone() is None, (
+            "Session B must not write to the database while A holds the lock"
+        )
+        check_cr.close()
+        check_conn.close()
+
+        # Release session A — it commits its transaction and releases the lock.
+        op_can_continue.set()
+        assert a_finished.wait(timeout=THREAD_TIMEOUT), (
+            "Session A did not complete in time"
+        )
+        assert not a_errors, f"Session A raised: {a_errors}"
+
+        # Session B should now acquire the lock and complete.
+        assert b_finished.wait(timeout=THREAD_TIMEOUT), (
+            "Session B did not complete in time"
+        )
+        assert not b_errors, f"Session B raised: {b_errors}"
+
+    # Verify the final database state: each config applied exactly once.
+    from psycopg2.extras import RealDictCursor
+
+    verify_conn = real_db_connect(**db_params, cursor_factory=RealDictCursor)
+    verify_cr = verify_conn.cursor()
+    verify_cr.execute(
+        "SELECT key, value FROM ir_config_parameter WHERE key = ANY(%s)",
+        ([PARAM_A, PARAM_B],),
     )
-    assert advisory_calls[0] == ("acquire", f"confidoo/{db_params['database']}")
-    assert advisory_calls[1] == ("release", f"confidoo/{db_params['database']}")
+    rows = {row["key"]: row["value"] for row in verify_cr.fetchall()}
+    assert rows == {PARAM_A: "set_by_a", PARAM_B: "set_by_b"}, (
+        f"Unexpected database state: {rows}"
+    )
+    verify_cr.close()
+    verify_conn.close()
+
+    # Cleanup: remove the test keys.
+    cleanup_conn = real_db_connect(**db_params)
+    cleanup_cr = cleanup_conn.cursor()
+    cleanup_cr.execute(
+        "DELETE FROM ir_config_parameter WHERE key = ANY(%s)",
+        ([PARAM_A, PARAM_B],),
+    )
+    cleanup_conn.commit()
+    cleanup_cr.close()
+    cleanup_conn.close()
+
+    thread_a.join(timeout=THREAD_TIMEOUT)
+    thread_b.join(timeout=THREAD_TIMEOUT)

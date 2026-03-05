@@ -8,6 +8,9 @@ import psycopg2
 import pytest
 from psycopg2.extras import RealDictCursor
 
+# Capture the real psycopg2.connect at import time, before any test can patch it.
+_real_psycopg2_connect = psycopg2.connect
+
 
 class MockSharedConnection:
     """Wrapper that intercepts commit() and close() for test isolation.
@@ -55,7 +58,32 @@ class MockSharedConnection:
 
 
 @pytest.fixture(scope="session")
-def odoo_db(docker_ip, docker_services):
+def db_params(docker_ip, docker_services):
+    """Return raw database connection parameters (no mocking).
+
+    Use for tests that need real independent connections (e.g., concurrency tests).
+    """
+    port = docker_services.port_for("db", 5432)
+    return {
+        "host": docker_ip,
+        "port": port,
+        "database": "odoo",
+        "user": "odoo",
+        "password": "odoo",
+    }
+
+
+@pytest.fixture(scope="session")
+def real_db_connect():
+    """Return the real psycopg2.connect, bypassing any active test mock.
+
+    Captured at import time before any fixture can patch psycopg2.connect.
+    """
+    return _real_psycopg2_connect
+
+
+@pytest.fixture(scope="session")
+def odoo_db(db_params):
     """Return database connection with parameters after Odoo initialization.
 
     Docker healthchecks ensure Odoo is ready before this fixture runs.
@@ -65,24 +93,9 @@ def odoo_db(docker_ip, docker_services):
     All calls to psycopg2.connect() will return the same shared connection,
     ensuring Confidoo and test code see the same transaction.
     """
-    # Get mapped port for database
-    port = docker_services.port_for("db", 5432)
-
-    # Create connection parameters
-    db_params = {
-        "host": docker_ip,
-        "port": port,
-        "database": "odoo",
-        "user": "odoo",
-        "password": "odoo",
-    }
-
-    # Store the original connect function
-    original_connect = psycopg2.connect
-
     # Create the real connection with RealDictCursor (same as Confidoo uses)
     # This ensures cursors return dicts instead of tuples
-    real_conn = original_connect(**db_params, cursor_factory=RealDictCursor)
+    real_conn = _real_psycopg2_connect(**db_params, cursor_factory=RealDictCursor)
 
     # Wrap it to intercept commit
     shared_conn = MockSharedConnection(real_conn)
