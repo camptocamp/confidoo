@@ -254,11 +254,11 @@ Custom exception classes for error handling:
 
 ### 4. Utilities ([utils/](confidoo/utils/))
 
-#### Exception Handler ([utils/click.py](confidoo/utils/click.py))
+#### Exception Handler ([utils/errors.py](confidoo/utils/errors.py))
 
 **`handle_exceptions()` Decorator**
 
-Provides unified exception handling for CLI commands.
+Provides unified exception handling for CLI commands, which must take the typer context as `ctx`.
 
 **Behavior:**
 - In debug mode: Allows exceptions to propagate with full stack traces

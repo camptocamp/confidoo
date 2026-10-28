@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from .main import Confidoo
-from .utils.click import handle_exceptions
+from .utils.errors import handle_exceptions
 
 # Configure Rich console
 console = Console()
@@ -36,6 +36,7 @@ app = typer.Typer(
 @app.callback()
 @handle_exceptions()
 def main(
+    ctx: typer.Context,
     debug: Annotated[
         bool,
         typer.Option("--debug", help="Enable debug mode", is_eager=True),
@@ -49,6 +50,7 @@ def main(
 @app.command()
 @handle_exceptions()
 def apply(
+    ctx: typer.Context,
     database: Annotated[
         str,
         typer.Option(

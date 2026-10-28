@@ -1,9 +1,11 @@
 import logging
 from pathlib import Path
 
+import typer
 from typer.testing import CliRunner
 
 from confidoo.cli import app
+from confidoo.utils.errors import handle_exceptions
 
 runner = CliRunner()
 
@@ -11,6 +13,20 @@ runner = CliRunner()
 def test_apply_help():
     result = runner.invoke(app, ["apply", "--help"])
     assert result.exit_code == 0
+
+
+def test_handle_exceptions_keeps_exit():
+    """Test that typer.Exit keeps its exit code and prints no error."""
+    exit_app = typer.Typer()
+
+    @exit_app.command()
+    @handle_exceptions()
+    def command(ctx: typer.Context):
+        raise typer.Exit(3)
+
+    result = runner.invoke(exit_app)
+    assert result.exit_code == 3
+    assert "Error" not in result.output
 
 
 def test_apply_with_config_file(odoo_db):
