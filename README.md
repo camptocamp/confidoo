@@ -47,11 +47,21 @@ cat config.ini | confidoo apply -d mydb -u odoo -p secret
 Database credentials can be provided via CLI options or PostgreSQL environment variables:
 
 **CLI Options:**
-- `--database` / `-d` (or `PGDATABASE`)
-- `--db-user` / `-u` (or `PGUSER`)
-- `--db-password` / `-p` (or `PGPASSWORD`)
-- `--db-host` / `-h` (or `PGHOST`, default: `localhost`)
-- `--db-port` / `-P` (or `PGPORT`, default: `5432`)
+- `--database` / `-d` (or `PGDATABASE`, required)
+- `--db-user` / `-u` (or `PGUSER`, optional)
+- `--db-password` / `-p` (or `PGPASSWORD`, optional)
+- `--db-host` / `-h` (or `PGHOST`, optional): host name, or Unix socket directory
+- `--db-port` / `-P` (or `PGPORT`, optional)
+
+Only the database is required. Options that are not set are not passed to the
+PostgreSQL client library (libpq), which then applies its own defaults: the current
+OS user, the password from `~/.pgpass` (or no password, for `peer` / `trust`
+authentication), the local Unix socket, and port `5432`.
+
+```bash
+# Connect through the local Unix socket as the current OS user
+confidoo apply config.ini -d mydb
+```
 
 **Debug Mode:**
 ```bash

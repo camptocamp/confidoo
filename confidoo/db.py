@@ -76,33 +76,42 @@ def parse_odoo_version(version: str | None) -> float | None:
 
 @dataclass
 class ConnectionParams:
-    """Database connection parameters."""
+    """Database connection parameters.
+
+    Any parameter left as ``None`` is omitted when connecting, so libpq applies
+    its own defaults (``PG*`` environment variables, ``.pgpass``, the current OS
+    user, the default Unix socket, etc.).
+    """
 
     database: str
-    user: str
-    password: str
-    host: str = "localhost"
-    port: int = 5432
+    user: str | None = None
+    password: str | None = None
+    host: str | None = None
+    port: int | None = None
 
     def to_kwargs(self) -> dict[str, Any]:
-        """Convert to psycopg2 connection keyword arguments.
+        """Convert to keyword arguments for :func:`psycopg2.connect`.
 
         Passing parameters as keyword arguments lets psycopg2 quote them,
         so values containing spaces, quotes or ``=`` are handled safely.
 
         Returns:
-            Keyword arguments for ``psycopg2.connect()``
+            Connection keyword arguments, without the ones that are ``None``
         """
-        return {
+        kwargs = {
             "dbname": self.database,
             "user": self.user,
             "password": self.password,
             "host": self.host,
             "port": self.port,
         }
+        return {key: value for key, value in kwargs.items() if value is not None}
 
     def __str__(self) -> str:
-        return f"{self.database} ({self.user}@{self.host}:{self.port})"
+        user = f"{self.user}@" if self.user else ""
+        host = self.host or "default host"
+        port = f":{self.port}" if self.port else ""
+        return f"{self.database} ({user}{host}{port})"
 
 
 class OdooDatabase:
@@ -112,7 +121,7 @@ class OdooDatabase:
     All operations within the context are part of a single transaction.
 
     Example:
-        >>> params = ConnectionParams(database="odoo", user="odoo", password="odoo")
+        >>> params = ConnectionParams(database="odoo", user="odoo")
         >>> with OdooDatabase(params) as db:
         ...     print(f"Odoo version: {db.odoo_version}")
         ...     model, res_id = db.resolve_xmlid("base.user_admin")

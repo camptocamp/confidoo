@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import typer
@@ -9,6 +10,54 @@ from confidoo.cli import app
 from confidoo.utils.errors import handle_exceptions
 
 runner = CliRunner()
+
+PG_ENV_VARS = ("PGDATABASE", "PGUSER", "PGPASSWORD", "PGHOST", "PGPORT")
+
+
+@pytest.fixture
+def mock_apply_config(monkeypatch):
+    """Patch Confidoo.apply_config and clear PG* env vars, for tests with no DB."""
+    for var in PG_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    with patch("confidoo.cli.Confidoo.apply_config") as mock:
+        yield mock
+
+
+def test_apply_only_database_required(mock_apply_config):
+    """Test that user, password, host and port are optional (libpq defaults)."""
+    result = runner.invoke(app, ["apply", "-d", "odoo"], input="")
+    assert result.exit_code == 0, result.output
+    mock_apply_config.assert_called_once()
+    kwargs = mock_apply_config.call_args.kwargs
+    assert kwargs["database"] == "odoo"
+    assert kwargs["user"] is None
+    assert kwargs["password"] is None
+    assert kwargs["host"] is None
+    assert kwargs["port"] is None
+
+
+def test_apply_database_still_required(mock_apply_config):
+    """Test that the database option is still required."""
+    result = runner.invoke(app, ["apply"], input="")
+    assert result.exit_code == 2
+    mock_apply_config.assert_not_called()
+
+
+def test_apply_reads_pg_env_vars(mock_apply_config, monkeypatch):
+    """Test that connection parameters are read from PG* environment variables."""
+    monkeypatch.setenv("PGDATABASE", "envdb")
+    monkeypatch.setenv("PGUSER", "envuser")
+    monkeypatch.setenv("PGPASSWORD", "envpass")
+    monkeypatch.setenv("PGHOST", "/var/run/postgresql")
+    monkeypatch.setenv("PGPORT", "5433")
+    result = runner.invoke(app, ["apply"], input="")
+    assert result.exit_code == 0, result.output
+    kwargs = mock_apply_config.call_args.kwargs
+    assert kwargs["database"] == "envdb"
+    assert kwargs["user"] == "envuser"
+    assert kwargs["password"] == "envpass"
+    assert kwargs["host"] == "/var/run/postgresql"
+    assert kwargs["port"] == 5433
 
 
 def test_apply_help():

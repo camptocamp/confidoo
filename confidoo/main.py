@@ -67,10 +67,10 @@ class Confidoo:
     def __init__(
         self,
         database: str,
-        user: str,
-        password: str,
-        host: str = "localhost",
-        port: int = 5432,
+        user: str | None = None,
+        password: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
         config_content: str | None = None,
         config_path: str | Path | None = None,
         config_file: TextIO | None = None,
@@ -79,10 +79,11 @@ class Confidoo:
 
         Args:
             database: Database name
-            user: Database user
-            password: Database password
-            host: Database host (default: localhost)
-            port: Database port (default: 5432)
+            user: Database user (default: libpq default, e.g. current OS user)
+            password: Database password (default: libpq default, e.g. .pgpass)
+            host: Database host or Unix socket directory (default: libpq
+                default, e.g. PGHOST or the local Unix socket)
+            port: Database port (default: libpq default, e.g. PGPORT or 5432)
             config_content: Optional INI configuration content
             config_path: Optional path to INI configuration file
             config_file: Optional file object with INI configuration
@@ -373,10 +374,10 @@ class Confidoo:
     def apply_config(
         cls,
         database: str,
-        user: str,
-        password: str,
-        host: str = "localhost",
-        port: int = 5432,
+        user: str | None = None,
+        password: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
         config_content: str | None = None,
         config_path: str | Path | None = None,
         config_file: TextIO | None = None,
@@ -388,10 +389,11 @@ class Confidoo:
 
         Args:
             database: Database name
-            user: Database user
-            password: Database password
-            host: Database host (default: localhost)
-            port: Database port (default: 5432)
+            user: Database user (default: libpq default, e.g. current OS user)
+            password: Database password (default: libpq default, e.g. .pgpass)
+            host: Database host or Unix socket directory (default: libpq
+                default, e.g. PGHOST or the local Unix socket)
+            port: Database port (default: libpq default, e.g. PGPORT or 5432)
             config_content: INI configuration content (mutually exclusive)
             config_path: Path to INI configuration file (mutually exclusive)
             config_file: File object with INI configuration (mutually exclusive)

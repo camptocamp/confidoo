@@ -61,20 +61,42 @@ def apply(
         ),
     ],
     user: Annotated[
-        str, typer.Option("--db-user", "-u", envvar="PGUSER", help="Database user.")
-    ],
-    password: Annotated[
-        str,
+        str | None,
         typer.Option(
-            "--db-password", "-p", envvar="PGPASSWORD", help="Database password."
+            "--db-user",
+            "-u",
+            envvar="PGUSER",
+            help="Database user. Defaults to the current OS user.",
         ),
-    ],
+    ] = None,
+    password: Annotated[
+        str | None,
+        typer.Option(
+            "--db-password",
+            "-p",
+            envvar="PGPASSWORD",
+            help="Database password. If omitted, ~/.pgpass, peer or trust auth apply.",
+        ),
+    ] = None,
     host: Annotated[
-        str, typer.Option("--db-host", "-h", envvar="PGHOST", help="Database host.")
-    ] = "localhost",
+        str | None,
+        typer.Option(
+            "--db-host",
+            "-h",
+            envvar="PGHOST",
+            help="Database host or Unix socket directory. "
+            "Defaults to the local Unix socket.",
+        ),
+    ] = None,
     port: Annotated[
-        int, typer.Option("--db-port", "-P", envvar="PGPORT", help="Database port.")
-    ] = 5432,
+        int | None,
+        typer.Option(
+            "--db-port",
+            "-P",
+            envvar="PGPORT",
+            help="Database port. Defaults to 5432.",
+        ),
+    ] = None,
     file: Annotated[typer.FileText | None, typer.Argument()] = None,
 ):
     """Apply a declarative configuration to an Odoo database.

@@ -25,6 +25,7 @@ The command-line interface built with Typer provides the user-facing commands:
 **Key Features:**
 - Supports multiple input methods: file argument, stdin pipe, or environment variable
 - Database credentials can be provided via CLI flags or PostgreSQL environment variables (PGDATABASE, PGUSER, PGPASSWORD, PGHOST, PGPORT)
+- Only the database is required; user, password, host and port default to `None` and are then left to libpq defaults (current OS user, `.pgpass`, peer/trust auth, Unix socket, port 5432)
 - Debug mode for detailed error traces
 - Automatic transaction management with commit/rollback
 - Row count reporting for visibility into changes
@@ -120,10 +121,10 @@ Main class that orchestrates configuration loading and application.
 ```python
 Confidoo(
     database: str,
-    user: str,
-    password: str,
-    host: str = "localhost",
-    port: int = 5432,
+    user: str | None = None,
+    password: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
     config_content: str | None = None,
     config_path: str | Path | None = None,
     config_file: TextIO | None = None,
@@ -194,10 +195,12 @@ The database module handles PostgreSQL connections and Odoo-specific operations.
 Dataclass encapsulating database connection parameters.
 
 **Attributes:**
-- `database`, `user`, `password`, `host`, `port`
+- `database` (required)
+- `user`, `password`, `host`, `port` (optional, default `None`: left to libpq defaults)
 
 **Methods:**
-- `to_kwargs()`: Converts to psycopg2 connection keyword arguments
+- `to_kwargs()`: Converts to keyword arguments for `psycopg2.connect()`, omitting `None` values
+- `__str__()`: Renders `database (user@host:port)` for logging, skipping unset parts and never including the password
 
 #### `OdooDatabase`
 Context manager for database connections with automatic transaction management.
