@@ -246,24 +246,22 @@ class ConfidooConfigParser:
         fields: dict[str, str | None] = {}
         table: str | None = None
 
-        for key, value in self._parser.items(section_name):
+        for key, raw_value in self._parser.items(section_name):
+            # None or blank value means empty assignment (e.g., "field =")
+            value = (raw_value or "").strip() or None
+
             # Handle special _table attribute
             if key == RESERVED_TABLE_FIELD:
-                if value is None or value.strip() == "":
+                if value is None:
                     msg = (
                         f"_table attribute cannot be empty in section: {section_name!r}"
                     )
                     raise InvalidSectionError(msg)
-                table = value.strip()
+                table = value
                 continue
 
-            # Store regular fields
-            # None or empty string value means empty assignment (e.g., "field =")
-            # This is used to unset parameters
-            if value is None or value.strip() == "":
-                fields[key] = None
-            else:
-                fields[key] = value.strip()
+            # Store regular fields. None is used to unset parameters
+            fields[key] = value
 
         return fields, table
 
