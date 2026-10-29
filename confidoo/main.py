@@ -245,22 +245,32 @@ class Confidoo:
             msg = f"Unknown operation type: {type(operation)}"
             raise ValueError(msg)
 
-    @staticmethod
-    def _build_set_clause(fields: Mapping[str, str | None]) -> sql.Composed:
-        """Build the SET clause of an UPDATE query.
+    def _update(
+        self, table: str, fields: Mapping[str, str | None], res_id: int | None = None
+    ) -> int:
+        """Run an UPDATE on a table, optionally restricted to a single record.
 
-        Field names are quoted with sql.Identifier, and values are left as
-        %s placeholders to be passed as query parameters, in the same order.
+        Field names are quoted with sql.Identifier, and values are passed as
+        query parameters (None for empty values).
 
         Args:
+            table: Table to update
             fields: Mapping of field names to values
+            res_id: Optional record id to restrict the update to
 
         Returns:
-            Composed SQL like ``"field1" = %s, "field2" = %s``
+            Number of rows affected
         """
-        return sql.SQL(", ").join(
+        set_clause = sql.SQL(", ").join(
             sql.SQL("{} = %s").format(sql.Identifier(field)) for field in fields
         )
+        query = sql.SQL("UPDATE {} SET {}").format(sql.Identifier(table), set_clause)
+        values = tuple(fields.values())
+        if res_id is not None:
+            query += sql.SQL(" WHERE id = %s")
+            values += (res_id,)
+        self.db.cr.execute(query, values)
+        return self.db.cr.rowcount
 
     def _apply_model_operation(self, operation: ModelOperation) -> None:
         """Apply settings to all records of a model.
@@ -276,19 +286,9 @@ class Confidoo:
         if not operation.fields:
             return  # Nothing to update
 
-        # Resolve table name
         table = operation.table or self.db.resolve_table_name(operation.identifier)
-
-        # Build SET clause using sql.Identifier for safe field names
-        set_clause = self._build_set_clause(operation.fields)
-
-        # Build values tuple (None for empty values)
-        values = tuple(operation.fields.values())
-
-        # Execute UPDATE query with safe identifiers
-        query = sql.SQL("UPDATE {} SET {}").format(sql.Identifier(table), set_clause)
-        self.db.cr.execute(query, values)
-        logger.info("✓ Updated %d row(s)", self.db.cr.rowcount)
+        rowcount = self._update(table, operation.fields)
+        logger.info("✓ Updated %d row(s)", rowcount)
 
     def _apply_record_operation(self, operation: RecordOperation) -> None:
         """Apply settings to a specific record by XMLID.
@@ -304,24 +304,11 @@ class Confidoo:
         if not operation.fields:
             return  # Nothing to update
 
-        # Resolve XMLID to model and res_id
+        # Resolve table name from the XMLID model, not the operation identifier
         model, res_id = self.db.resolve_xmlid(operation.identifier)
-
-        # Resolve table name (use model from XMLID, not operation identifier)
         table = operation.table or self.db.resolve_table_name(model)
 
-        # Build SET clause using sql.Identifier for safe field names
-        set_clause = self._build_set_clause(operation.fields)
-
-        # Build values tuple with res_id at the end for WHERE clause
-        values = tuple(operation.fields.values()) + (res_id,)
-
-        # Execute UPDATE query with safe identifiers and WHERE clause
-        query = sql.SQL("UPDATE {} SET {} WHERE id = %s").format(
-            sql.Identifier(table), set_clause
-        )
-        self.db.cr.execute(query, values)
-        if not self.db.cr.rowcount:
+        if not self._update(table, operation.fields, res_id):
             logger.warning(
                 "XMLID %s resolved to %s,%s but no row was found in table %s",
                 operation.identifier,
