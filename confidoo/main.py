@@ -25,6 +25,8 @@ from .config import (
 from .db import ConnectionParams, OdooDatabase
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from .config import ParsedConfig
 
 
@@ -124,8 +126,7 @@ class Confidoo:
         elif config_path is not None:
             self.load_config_file(config_path)
         elif config_file is not None:
-            content = config_file.read()
-            self.load_config(content)
+            self.load_config(config_file.read())
 
     @property
     def config(self) -> ParsedConfig:
@@ -187,9 +188,7 @@ class Confidoo:
             InvalidSectionError: If section syntax is invalid
             FileNotFoundError: If the file doesn't exist
         """
-        path_obj = Path(path) if isinstance(path, str) else path
-        content = path_obj.read_text()
-        self.load_config(content)
+        self.load_config(Path(path).read_text())
 
     def connect(self) -> OdooDatabase:
         """Establish database connection.
@@ -241,6 +240,23 @@ class Confidoo:
             msg = f"Unknown operation type: {type(operation)}"
             raise ValueError(msg)
 
+    @staticmethod
+    def _build_set_clause(fields: Mapping[str, str | None]) -> sql.Composed:
+        """Build the SET clause of an UPDATE query.
+
+        Field names are quoted with sql.Identifier, and values are left as
+        %s placeholders to be passed as query parameters, in the same order.
+
+        Args:
+            fields: Mapping of field names to values
+
+        Returns:
+            Composed SQL like ``"field1" = %s, "field2" = %s``
+        """
+        return sql.SQL(", ").join(
+            sql.SQL("{} = %s").format(sql.Identifier(field)) for field in fields
+        )
+
     def _apply_model_operation(self, operation: ModelOperation) -> None:
         """Apply settings to all records of a model.
 
@@ -259,10 +275,7 @@ class Confidoo:
         table = operation.table or self.db.resolve_table_name(operation.identifier)
 
         # Build SET clause using sql.Identifier for safe field names
-        set_clause = sql.SQL(", ").join(
-            sql.SQL("{} = %s").format(sql.Identifier(field))
-            for field in operation.fields.keys()
-        )
+        set_clause = self._build_set_clause(operation.fields)
 
         # Build values tuple (None for empty values)
         values = tuple(operation.fields.values())
@@ -293,10 +306,7 @@ class Confidoo:
         table = operation.table or self.db.resolve_table_name(model)
 
         # Build SET clause using sql.Identifier for safe field names
-        set_clause = sql.SQL(", ").join(
-            sql.SQL("{} = %s").format(sql.Identifier(field))
-            for field in operation.fields.keys()
-        )
+        set_clause = self._build_set_clause(operation.fields)
 
         # Build values tuple with res_id at the end for WHERE clause
         values = tuple(operation.fields.values()) + (res_id,)
