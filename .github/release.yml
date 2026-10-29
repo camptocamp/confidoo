@@ -1,0 +1,17 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Documentation
+      labels:
+        - documentation
+    - title: CI & Tooling
+      labels:
+        - ci
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other Changes
+      labels:
+        - '*'
