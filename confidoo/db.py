@@ -258,11 +258,7 @@ class OdooDatabase:
             NotOdooDatabaseError: If ir_module_module table doesn't exist
         """
         query = """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = 'public'
-                AND table_name = 'ir_module_module'
-            ) AS table_exists
+            SELECT to_regclass('public.ir_module_module') IS NOT NULL AS table_exists
         """
 
         self.cr.execute(query)
