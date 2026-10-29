@@ -34,7 +34,6 @@ app = typer.Typer(
 
 
 @app.callback()
-@handle_exceptions()
 def main(
     ctx: typer.Context,
     debug: Annotated[
