@@ -197,7 +197,7 @@ Dataclass encapsulating database connection parameters.
 - `database`, `user`, `password`, `host`, `port`
 
 **Methods:**
-- `to_dsn()`: Converts to psycopg2 connection string
+- `to_kwargs()`: Converts to psycopg2 connection keyword arguments
 
 #### `OdooDatabase`
 Context manager for database connections with automatic transaction management.
