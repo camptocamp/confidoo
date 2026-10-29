@@ -345,3 +345,44 @@ def test_apply_empty_config_warns(odoo_db, caplog, config_content):
         record.levelno == logging.WARNING and "Nothing to apply" in record.message
         for record in caplog.records
     ), caplog.text
+
+
+@pytest.mark.parametrize(
+    ("config_name", "active"),
+    [
+        ("test-config-cron-inactive.ini", False),
+        ("test-config-cron-active.ini", True),
+    ],
+)
+def test_toggle_cron_active_by_xmlid(odoo_db, config_name, active):
+    """Test activating / deactivating a standard ir.cron record by its XMLID."""
+    config_file = Path(__file__).parent / "fixtures" / config_name
+    cursor, db_params = odoo_db
+    query = """
+        SELECT c.id, c.active
+        FROM ir_cron c
+        JOIN ir_model_data imd ON imd.res_id = c.id
+        WHERE imd.module = 'base'
+        AND imd.name = 'autovacuum_job'
+        AND imd.model = 'ir.cron'
+    """
+
+    # Start from the opposite state, so the change is actually observable
+    cursor.execute(query)
+    cron = cursor.fetchone()
+    assert cron is not None, "base.autovacuum_job record not found"
+    cursor.execute(
+        "UPDATE ir_cron SET active = %s WHERE id = %s", (not active, cron["id"])
+    )
+
+    Confidoo.apply_config(
+        database=db_params["database"],
+        user=db_params["user"],
+        password=db_params["password"],
+        host=db_params["host"],
+        port=db_params["port"],
+        config_path=config_file,
+    )
+
+    cursor.execute(query)
+    assert cursor.fetchone()["active"] is active
