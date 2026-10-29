@@ -31,15 +31,15 @@ def handle_exceptions():
             # Check the current context (e.g: command options)
             # and the root context (e.g: global options)
             debug = ctx.params.get("debug") or ctx.find_root().params.get("debug")
-            # If debug mode is enabled, run the function without catching exceptions
-            if debug:
-                return func(ctx, *args, **kwargs)
-            # Otherwise, print a short error message
             try:
                 return func(ctx, *args, **kwargs)
             except typer.Exit:
                 raise
             except Exception as e:
+                # In debug mode, let the exception propagate with its stack trace
+                if debug:
+                    raise
+                # Otherwise, print a short error message
                 typer.echo(f"Error: Failed to {func.__name__}: {e}", err=True)
                 raise typer.Exit(1) from e
 
