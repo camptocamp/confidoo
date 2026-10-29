@@ -306,6 +306,15 @@ class Confidoo:
             sql.Identifier(table), set_clause
         )
         self.db.cr.execute(query, values)
+        if not self.db.cr.rowcount:
+            logger.warning(
+                "XMLID %s resolved to %s,%s but no row was found in table %s",
+                operation.identifier,
+                model,
+                res_id,
+                table,
+            )
+            return
         logger.info("✓ Updated")
 
     def _apply_config_param_operation(self, operation: ConfigParamOperation) -> None:

@@ -3,6 +3,7 @@
 
 """Tests for Confidoo API (programmatic usage)."""
 
+import logging
 from pathlib import Path
 from textwrap import dedent
 
@@ -294,3 +295,32 @@ def test_apply_without_connection_raises_runtime_error():
     # Accessing db property without connection should raise RuntimeError
     with pytest.raises(RuntimeError, match="No active database connection"):
         _ = confidoo.db
+
+
+def test_apply_stale_xmlid_warns(odoo_db, caplog):
+    """Test that a stale XMLID (pointing to a deleted row) logs a warning."""
+    cursor, db_params = odoo_db
+    cursor.execute(
+        """
+        INSERT INTO ir_model_data (module, name, model, res_id, noupdate)
+        VALUES ('confidoo_test', 'stale_partner', 'res.partner', 2147483647, true)
+        """
+    )
+
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(
+            database=db_params["database"],
+            user=db_params["user"],
+            password=db_params["password"],
+            host=db_params["host"],
+            port=db_params["port"],
+            config_content="[record:confidoo_test.stale_partner]\nname = Ghost\n",
+        )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "confidoo_test.stale_partner" in message
+    assert "res.partner,2147483647" in message
+    assert "res_partner" in message
+    assert not any(r.getMessage() == "✓ Updated" for r in caplog.records)
