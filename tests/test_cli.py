@@ -13,6 +13,24 @@ runner = CliRunner()
 
 PG_ENV_VARS = ("PGDATABASE", "PGUSER", "PGPASSWORD", "PGHOST", "PGPORT")
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def db_cli_args(db_params: dict) -> list[str]:
+    """Build the CLI database options from the odoo_db fixture params."""
+    return [
+        "-d",
+        db_params["database"],
+        "-u",
+        db_params["user"],
+        "-p",
+        db_params["password"],
+        "-h",
+        db_params["host"],
+        "-P",
+        str(db_params["port"]),
+    ]
+
 
 @pytest.fixture
 def mock_apply_config(monkeypatch):
@@ -81,7 +99,7 @@ def test_handle_exceptions_keeps_exit():
 
 def test_apply_with_config_file(odoo_db):
     """Test applying configuration with automatic rollback."""
-    config_file = Path(__file__).parent / "fixtures" / "test-config-01.ini"
+    config_file = FIXTURES_DIR / "test-config-01.ini"
 
     # Unpack connection and db params from fixture
     cursor, db_params = odoo_db
@@ -92,16 +110,7 @@ def test_apply_with_config_file(odoo_db):
         [
             "apply",
             str(config_file),
-            "-d",
-            db_params["database"],
-            "-u",
-            db_params["user"],
-            "-p",
-            db_params["password"],
-            "-h",
-            db_params["host"],
-            "-P",
-            str(db_params["port"]),
+            *db_cli_args(db_params),
         ],
     )
 
@@ -167,16 +176,7 @@ def test_apply_with_invalid_config(odoo_db):
         app,
         [
             "apply",
-            "-d",
-            db_params["database"],
-            "-u",
-            db_params["user"],
-            "-p",
-            db_params["password"],
-            "-h",
-            db_params["host"],
-            "-P",
-            str(db_params["port"]),
+            *db_cli_args(db_params),
         ],
         input="[invalid_section]\nfield = value\n",
     )
@@ -188,9 +188,7 @@ def test_apply_with_invalid_config(odoo_db):
 
 def test_apply_nonexistent_model(odoo_db):
     """Test error handling when applying to non-existent model/table."""
-    config_file = (
-        Path(__file__).parent / "fixtures" / "test-config-nonexistent-model.ini"
-    )
+    config_file = FIXTURES_DIR / "test-config-nonexistent-model.ini"
     __, db_params = odoo_db
 
     result = runner.invoke(
@@ -198,16 +196,7 @@ def test_apply_nonexistent_model(odoo_db):
         [
             "apply",
             str(config_file),
-            "-d",
-            db_params["database"],
-            "-u",
-            db_params["user"],
-            "-p",
-            db_params["password"],
-            "-h",
-            db_params["host"],
-            "-P",
-            str(db_params["port"]),
+            *db_cli_args(db_params),
         ],
     )
 
@@ -225,9 +214,7 @@ def test_apply_nonexistent_model(odoo_db):
 
 def test_apply_nonexistent_xmlid(odoo_db):
     """Test error handling when applying to non-existent XMLID."""
-    config_file = (
-        Path(__file__).parent / "fixtures" / "test-config-nonexistent-xmlid.ini"
-    )
+    config_file = FIXTURES_DIR / "test-config-nonexistent-xmlid.ini"
     __, db_params = odoo_db
 
     result = runner.invoke(
@@ -235,16 +222,7 @@ def test_apply_nonexistent_xmlid(odoo_db):
         [
             "apply",
             str(config_file),
-            "-d",
-            db_params["database"],
-            "-u",
-            db_params["user"],
-            "-p",
-            db_params["password"],
-            "-h",
-            db_params["host"],
-            "-P",
-            str(db_params["port"]),
+            *db_cli_args(db_params),
         ],
     )
 
@@ -269,16 +247,7 @@ def test_apply_empty_identifier(odoo_db):
         app,
         [
             "apply",
-            "-d",
-            db_params["database"],
-            "-u",
-            db_params["user"],
-            "-p",
-            db_params["password"],
-            "-h",
-            db_params["host"],
-            "-P",
-            str(db_params["port"]),
+            *db_cli_args(db_params),
         ],
         input="[model:]\nfield = value\n",
     )
@@ -305,16 +274,7 @@ def test_debug_flag(odoo_db, caplog):
             [
                 "--debug",
                 "apply",
-                "-d",
-                db_params["database"],
-                "-u",
-                db_params["user"],
-                "-p",
-                db_params["password"],
-                "-h",
-                db_params["host"],
-                "-P",
-                str(db_params["port"]),
+                *db_cli_args(db_params),
             ],
             input="",
         )
@@ -338,16 +298,7 @@ def test_apply_empty_config_warns(odoo_db, caplog, config_input):
             app,
             [
                 "apply",
-                "-d",
-                db_params["database"],
-                "-u",
-                db_params["user"],
-                "-p",
-                db_params["password"],
-                "-h",
-                db_params["host"],
-                "-P",
-                str(db_params["port"]),
+                *db_cli_args(db_params),
             ],
             input=config_input,
         )

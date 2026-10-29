@@ -16,20 +16,18 @@ from confidoo.exceptions import (
 )
 from confidoo.main import Confidoo
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
 
 def test_apply_with_config_content(odoo_db):
     """Test applying configuration using config_content parameter."""
-    config_file = Path(__file__).parent / "fixtures" / "test-config-01.ini"
+    config_file = FIXTURES_DIR / "test-config-01.ini"
     config_content = config_file.read_text()
     cursor, db_params = odoo_db
 
     # Apply configuration using Confidoo class
     Confidoo.apply_config(
-        database=db_params["database"],
-        user=db_params["user"],
-        password=db_params["password"],
-        host=db_params["host"],
-        port=db_params["port"],
+        **db_params,
         config_content=config_content,
     )
 
@@ -87,16 +85,12 @@ def test_apply_with_config_content(odoo_db):
 
 def test_apply_with_config_file(odoo_db):
     """Test applying configuration using config_path parameter."""
-    config_file = Path(__file__).parent / "fixtures" / "test-config-01.ini"
+    config_file = FIXTURES_DIR / "test-config-01.ini"
     cursor, db_params = odoo_db
 
     # Apply configuration using Confidoo class
     Confidoo.apply_config(
-        database=db_params["database"],
-        user=db_params["user"],
-        password=db_params["password"],
-        host=db_params["host"],
-        port=db_params["port"],
+        **db_params,
         config_path=config_file,
     )
 
@@ -129,11 +123,7 @@ def test_apply_with_context_manager(odoo_db):
 
     # Use context manager pattern
     confidoo = Confidoo(
-        database=db_params["database"],
-        user=db_params["user"],
-        password=db_params["password"],
-        host=db_params["host"],
-        port=db_params["port"],
+        **db_params,
         config_content=config_content,
     )
 
@@ -159,11 +149,7 @@ def test_apply_with_separate_load(odoo_db):
 
     # Create instance without config
     confidoo = Confidoo(
-        database=db_params["database"],
-        user=db_params["user"],
-        password=db_params["password"],
-        host=db_params["host"],
-        port=db_params["port"],
+        **db_params,
     )
 
     # Load config separately
@@ -187,30 +173,20 @@ def test_apply_with_invalid_config(odoo_db):
     # Invalid section syntax
     with pytest.raises(InvalidSectionError, match="Invalid section name"):
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_content="[invalid_section]\nfield = value\n",
         )
 
 
 def test_apply_nonexistent_model(odoo_db):
     """Test error handling when applying to non-existent model/table."""
-    config_file = (
-        Path(__file__).parent / "fixtures" / "test-config-nonexistent-model.ini"
-    )
+    config_file = FIXTURES_DIR / "test-config-nonexistent-model.ini"
     __, db_params = odoo_db
 
     # psycopg2 errors propagate directly, not wrapped in DatabaseError
     with pytest.raises(errors.lookup(errorcodes.UNDEFINED_TABLE)) as exc_info:
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_path=config_file,
         )
 
@@ -223,18 +199,12 @@ def test_apply_nonexistent_model(odoo_db):
 
 def test_apply_nonexistent_xmlid(odoo_db):
     """Test error handling when applying to non-existent XMLID."""
-    config_file = (
-        Path(__file__).parent / "fixtures" / "test-config-nonexistent-xmlid.ini"
-    )
+    config_file = FIXTURES_DIR / "test-config-nonexistent-xmlid.ini"
     __, db_params = odoo_db
 
     with pytest.raises(XmlIdNotFoundError):
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_path=config_file,
         )
 
@@ -245,11 +215,7 @@ def test_apply_empty_identifier(odoo_db):
 
     with pytest.raises(InvalidSectionError):
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_content="[model:]\nfield = value\n",
         )
 
@@ -271,11 +237,7 @@ def test_apply_without_config_raises_runtime_error(odoo_db):
     __, db_params = odoo_db
 
     confidoo = Confidoo(
-        database=db_params["database"],
-        user=db_params["user"],
-        password=db_params["password"],
-        host=db_params["host"],
-        port=db_params["port"],
+        **db_params,
     )
 
     with confidoo.connect():
@@ -309,11 +271,7 @@ def test_apply_stale_xmlid_warns(odoo_db, caplog):
 
     with caplog.at_level(logging.INFO, logger="confidoo.main"):
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_content="[record:confidoo_test.stale_partner]\nname = Ghost\n",
         )
 
@@ -333,11 +291,7 @@ def test_apply_empty_config_warns(odoo_db, caplog, config_content):
 
     with caplog.at_level(logging.WARNING, logger="confidoo.main"):
         Confidoo.apply_config(
-            database=db_params["database"],
-            user=db_params["user"],
-            password=db_params["password"],
-            host=db_params["host"],
-            port=db_params["port"],
+            **db_params,
             config_content=config_content,
         )
 
