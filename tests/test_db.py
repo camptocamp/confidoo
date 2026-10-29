@@ -8,12 +8,8 @@ from unittest.mock import MagicMock, patch
 import psycopg2
 import pytest
 
-from confidoo.db import ConnectionParams, OdooDatabase
-from confidoo.exceptions import (
-    DatabaseConnectionError,
-    NotOdooDatabaseError,
-    OdooVersionError,
-)
+from confidoo.db import ConnectionParams, OdooDatabase, parse_odoo_version
+from confidoo.exceptions import DatabaseConnectionError, NotOdooDatabaseError
 
 
 @pytest.mark.parametrize(
@@ -65,8 +61,6 @@ def _make_db():
     [
         # _check_odoo_database fails: not an Odoo database
         ([{"table_exists": False}], NotOdooDatabaseError),
-        # _get_odoo_version fails: no base module version
-        ([{"table_exists": True}, {"latest_version": None}], OdooVersionError),
         # Any psycopg2 error during the checks gets wrapped
         (psycopg2.OperationalError("boom"), DatabaseConnectionError),
     ],
@@ -104,3 +98,25 @@ def test_enter_cleanup_errors_do_not_mask_original():
 
     assert db._cr is None
     assert db._conn is None
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("18.0.1.3", 18.0),
+        ("17.0", 17.0),
+        ("16", 16.0),
+        ("saas~17.2.1.0", 17.2),
+        ("saas~18.3", 18.3),
+        (" 18.0.1.3 ", 18.0),
+    ],
+)
+def test_parse_odoo_version(version, expected):
+    """Test parsing valid Odoo module versions."""
+    assert parse_odoo_version(version) == expected
+
+
+@pytest.mark.parametrize("version", [None, "", "unknown", "saas~", "v18.0"])
+def test_parse_odoo_version_invalid(version):
+    """Test that unparsable versions return None instead of raising."""
+    assert parse_odoo_version(version) is None

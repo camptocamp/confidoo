@@ -206,7 +206,7 @@ Context manager for database connections with automatic transaction management.
 - **`__enter__`**:
   - Connects to PostgreSQL with RealDictCursor
   - Validates this is an Odoo database (checks for `ir_module_module` table)
-  - Extracts Odoo version from base module
+  - Extracts Odoo version from base module (informational; logs a warning and leaves `odoo_version` as `None` if it can't be determined)
   - Returns self for use in `with` statement
 - **`__exit__`**:
   - Commits transaction on success
@@ -233,7 +233,7 @@ Context manager for database connections with automatic transaction management.
 **Private Methods:**
 
 - **`_check_odoo_database()`**: Validates `ir_module_module` table exists
-- **`_get_odoo_version()`**: Extracts version from base module's `latest_version` field
+- **`_get_odoo_version()`**: Extracts major version (float, e.g. `18.0`) from base module's `latest_version` field via the pure `parse_odoo_version()` helper (supports `saas~` prefixes). Returns `None` and logs a warning if missing or unparsable
 
 ### 5. Exception Hierarchy ([exceptions.py](confidoo/exceptions.py))
 
@@ -248,7 +248,7 @@ Custom exception classes for error handling:
 - **`DatabaseError`**: Base exception for database operations
 - **`DatabaseConnectionError`**: Connection to database failed
 - **`NotOdooDatabaseError`**: Database validation failed (missing `ir_module_module` table)
-- **`OdooVersionError`**: Version detection failed
+- **`OdooVersionError`**: Version detection failed (no longer raised; version detection is non-fatal. Kept for backwards compatibility)
 - **`XmlIdNotFoundError`**: XMLID resolution failed (record not found in `ir_model_data`)
 - **`TransactionError`**: Transaction operation failed
 

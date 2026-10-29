@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -33,7 +34,6 @@ except ImportError as e:  # pragma: no cover
 from .exceptions import (
     DatabaseConnectionError,
     NotOdooDatabaseError,
-    OdooVersionError,
     XmlIdNotFoundError,
 )
 
@@ -42,6 +42,36 @@ if TYPE_CHECKING:
     from psycopg2.extensions import cursor as Cursor
 
 logger = logging.getLogger(__name__)
+
+# Matches the major.minor prefix of an Odoo module version, optionally prefixed
+# with "saas~" (e.g. '18.0.1.3', 'saas~17.2.1.0')
+_ODOO_VERSION_RE = re.compile(r"^(?:saas~)?(\d+)(?:\.(\d+))?")
+
+
+def parse_odoo_version(version: str | None) -> float | None:
+    """Parse the Odoo major version from a module version string.
+
+    Args:
+        version: Module version string (e.g., '18.0.1.3', 'saas~17.2.1.0')
+
+    Returns:
+        Major version as float (e.g., 18.0, 17.2), or None if it can't be parsed
+
+    Example:
+        >>> parse_odoo_version("18.0.1.3")
+        18.0
+        >>> parse_odoo_version("saas~17.2.1.0")
+        17.2
+        >>> parse_odoo_version("unknown") is None
+        True
+    """
+    if not version:
+        return None
+    match = _ODOO_VERSION_RE.match(version.strip())
+    if not match:
+        return None
+    major, minor = match.groups()
+    return float(f"{major}.{minor or 0}")
 
 
 @dataclass
@@ -124,7 +154,6 @@ class OdooDatabase:
         Raises:
             DatabaseConnectionError: If connection fails
             NotOdooDatabaseError: If database is not an Odoo database
-            OdooVersionError: If Odoo version cannot be determined
         """
         try:
             logger.info("Connecting to database %s...", self.params)
@@ -144,7 +173,10 @@ class OdooDatabase:
             # Get and store Odoo version
             self.odoo_version = self._get_odoo_version()
 
-            logger.info("Connected to an Odoo %s database", self.odoo_version)
+            if self.odoo_version is not None:
+                logger.info("Connected to an Odoo %s database", self.odoo_version)
+            else:
+                logger.info("Connected to an Odoo database (unknown version)")
 
             return self
 
@@ -236,17 +268,17 @@ class OdooDatabase:
             )
             raise NotOdooDatabaseError(msg)
 
-    def _get_odoo_version(self) -> float:
+    def _get_odoo_version(self) -> float | None:
         """Extract Odoo major version from base module.
 
         Queries the ir_module_module table for the 'base' module version
         and extracts the major version (e.g., '18.0.1.3' -> 18.0).
 
-        Returns:
-            Major version as float (e.g., 18.0, 17.0)
+        The version is informational only: if it is missing or can't be parsed,
+        a warning is logged and None is returned.
 
-        Raises:
-            OdooVersionError: If version cannot be determined
+        Returns:
+            Major version as float (e.g., 18.0, 17.0), or None if unknown
         """
         query = """
             SELECT latest_version
@@ -256,25 +288,15 @@ class OdooDatabase:
 
         self.cr.execute(query)
         result = self.cr.fetchone()
+        version_str = result["latest_version"] if result else None
 
-        if not result or not result["latest_version"]:
-            msg = (
-                "Cannot determine Odoo version. "
-                "The 'base' module version is not available."
+        version = parse_odoo_version(version_str)
+        if version is None:
+            logger.warning(
+                "Cannot determine Odoo version from 'base' module version: %r",
+                version_str,
             )
-            raise OdooVersionError(msg)
-
-        version_str = result["latest_version"]
-
-        # Extract major version (e.g., '18.0.1.3' -> 18.0)
-        try:
-            parts = version_str.split(".")
-            major = int(parts[0])
-            minor = int(parts[1]) if len(parts) > 1 else 0
-            return float(f"{major}.{minor}")
-        except (ValueError, IndexError) as e:
-            msg = f"Invalid version format: {version_str}"
-            raise OdooVersionError(msg) from e
+        return version
 
     def resolve_xmlid(self, xmlid: str) -> tuple[str, int]:
         """Resolve XMLID to (model, res_id).
