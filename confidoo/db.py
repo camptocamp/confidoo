@@ -9,6 +9,7 @@ and Odoo-specific utility methods.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -149,10 +150,30 @@ class OdooDatabase:
 
         except psycopg2.Error as e:
             # Close connection if partially established
-            if self._conn:
-                self._conn.close()
+            self._close_connection()
             msg = f"Failed to connect to database: {e}"
             raise DatabaseConnectionError(msg) from e
+
+        except BaseException:
+            # __exit__ won't run if __enter__ raises, so clean up here
+            self._close_connection()
+            raise
+
+    def _close_connection(self) -> None:
+        """Close the cursor and connection, if open, ignoring errors.
+
+        Used to release resources when ``__enter__`` fails, so that
+        cleanup errors don't mask the original exception.
+        """
+        cr, conn = self._cr, self._conn
+        self._cr = None
+        self._conn = None
+        if cr:
+            with contextlib.suppress(psycopg2.Error):
+                cr.close()
+        if conn:
+            with contextlib.suppress(psycopg2.Error):
+                conn.close()
 
     def __exit__(
         self,
