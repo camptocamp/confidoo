@@ -214,6 +214,10 @@ class Confidoo:
             RuntimeError: If called outside connect() context
             DatabaseError: If database operations fail
         """
+        if len(self.config) == 0:
+            logger.warning("Nothing to apply: the configuration has no sections")
+            return
+
         # Apply all operations in order
         for operation in self.config:
             self._apply_operation(operation)

@@ -324,3 +324,24 @@ def test_apply_stale_xmlid_warns(odoo_db, caplog):
     assert "res.partner,2147483647" in message
     assert "res_partner" in message
     assert not any(r.getMessage() == "✓ Updated" for r in caplog.records)
+
+
+@pytest.mark.parametrize("config_content", ["", "\n", "   \n\t\n"])
+def test_apply_empty_config_warns(odoo_db, caplog, config_content):
+    """Test that applying an empty config logs a warning instead of failing."""
+    __, db_params = odoo_db
+
+    with caplog.at_level(logging.WARNING, logger="confidoo.main"):
+        Confidoo.apply_config(
+            database=db_params["database"],
+            user=db_params["user"],
+            password=db_params["password"],
+            host=db_params["host"],
+            port=db_params["port"],
+            config_content=config_content,
+        )
+
+    assert any(
+        record.levelno == logging.WARNING and "Nothing to apply" in record.message
+        for record in caplog.records
+    ), caplog.text

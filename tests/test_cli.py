@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -276,3 +277,34 @@ def test_debug_flag(odoo_db, caplog):
 
         # Verify root logger level was set to DEBUG by the --debug flag
         assert logging.getLogger().level == logging.DEBUG
+
+
+@pytest.mark.parametrize("config_input", ["", "\n"])
+def test_apply_empty_config_warns(odoo_db, caplog, config_input):
+    """Test that an empty config piped from stdin warns and exits with 0."""
+    __, db_params = odoo_db
+
+    with caplog.at_level(logging.WARNING, logger="confidoo.main"):
+        result = runner.invoke(
+            app,
+            [
+                "apply",
+                "-d",
+                db_params["database"],
+                "-u",
+                db_params["user"],
+                "-p",
+                db_params["password"],
+                "-h",
+                db_params["host"],
+                "-P",
+                str(db_params["port"]),
+            ],
+            input=config_input,
+        )
+
+    assert result.exit_code == 0, f"{result.stdout}\n{result.stderr}"
+    assert any(
+        record.levelno == logging.WARNING and "Nothing to apply" in record.message
+        for record in caplog.records
+    ), caplog.text
