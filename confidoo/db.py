@@ -53,19 +53,22 @@ class ConnectionParams:
     host: str = "localhost"
     port: int = 5432
 
-    def to_dsn(self) -> str:
-        """Convert to psycopg2 connection string.
+    def to_kwargs(self) -> dict[str, Any]:
+        """Convert to psycopg2 connection keyword arguments.
+
+        Passing parameters as keyword arguments lets psycopg2 quote them,
+        so values containing spaces, quotes or ``=`` are handled safely.
 
         Returns:
-            PostgreSQL connection string (DSN)
+            Keyword arguments for ``psycopg2.connect()``
         """
-        return (
-            f"dbname={self.database} "
-            f"user={self.user} "
-            f"password={self.password} "
-            f"host={self.host} "
-            f"port={self.port}"
-        )
+        return {
+            "dbname": self.database,
+            "user": self.user,
+            "password": self.password,
+            "host": self.host,
+            "port": self.port,
+        }
 
     def __str__(self) -> str:
         return f"{self.database} ({self.user}@{self.host}:{self.port})"
@@ -127,7 +130,7 @@ class OdooDatabase:
 
             # Connect to PostgreSQL with dict cursor factory
             self._conn = psycopg2.connect(
-                self.params.to_dsn(),
+                **self.params.to_kwargs(),
                 cursor_factory=RealDictCursor,
             )
 
