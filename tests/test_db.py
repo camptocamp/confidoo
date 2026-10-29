@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import psycopg2
 import pytest
+from psycopg2.extras import RealDictCursor
 
 from confidoo.db import ConnectionParams, OdooDatabase, parse_odoo_version
 from confidoo.exceptions import DatabaseConnectionError, NotOdooDatabaseError
+from confidoo.main import Confidoo
 
 
 @pytest.mark.parametrize(
@@ -47,8 +49,8 @@ def test_connect_uses_keyword_arguments():
     args, kwargs = mock_connect.call_args
     assert args == ()
     assert kwargs["password"] == "p@ss word"
-    assert kwargs["host"] == "localhost"
-    assert kwargs["port"] == 5432
+    assert "host" not in kwargs
+    assert "port" not in kwargs
 
 
 def _make_db():
@@ -120,3 +122,52 @@ def test_parse_odoo_version(version, expected):
 def test_parse_odoo_version_invalid(version):
     """Test that unparsable versions return None instead of raising."""
     assert parse_odoo_version(version) is None
+
+
+def test_connection_params_to_kwargs_omits_none():
+    """Test that unset parameters are omitted so libpq applies its defaults."""
+    params = ConnectionParams(database="odoo")
+    assert params.to_kwargs() == {"dbname": "odoo"}
+
+
+def test_connection_params_to_kwargs_keeps_empty_password():
+    """Test that an explicitly empty password is not treated as unset."""
+    params = ConnectionParams(database="odoo", password="")
+    assert params.to_kwargs() == {"dbname": "odoo", "password": ""}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        (
+            {"user": "odoo", "password": "secret", "host": "localhost", "port": 5432},
+            "odoo (odoo@localhost:5432)",
+        ),
+        ({}, "odoo (default host)"),
+        ({"user": "odoo"}, "odoo (odoo@default host)"),
+        ({"host": "/var/run/postgresql"}, "odoo (/var/run/postgresql)"),
+        ({"port": 5433}, "odoo (default host:5433)"),
+    ],
+)
+def test_connection_params_str(kwargs, expected):
+    """Test that connection params render without None values or password."""
+    params = ConnectionParams(database="odoo", **kwargs)
+    assert str(params) == expected
+    assert "secret" not in str(params)
+
+
+def test_connect_omits_unset_params():
+    """Test that psycopg2.connect only receives the parameters that are set."""
+
+    class StopConnectError(Exception):
+        pass
+
+    confidoo = Confidoo(database="odoo", user="odoo", config_content="")
+    with patch("psycopg2.connect", side_effect=StopConnectError) as mock_connect:
+        with pytest.raises(StopConnectError):
+            with confidoo.connect():
+                pass  # pragma: no cover
+
+    mock_connect.assert_called_once_with(
+        dbname="odoo", user="odoo", cursor_factory=RealDictCursor
+    )
