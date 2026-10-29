@@ -122,12 +122,12 @@ class Confidoo:
             raise ValueError(msg)
 
         # Load config if provided
+        if config_file is not None:
+            config_content = config_file.read()
         if config_content is not None:
             self.load_config(config_content)
         elif config_path is not None:
             self.load_config_file(config_path)
-        elif config_file is not None:
-            self.load_config(config_file.read())
 
     @property
     def config(self) -> ParsedConfig:
