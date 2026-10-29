@@ -276,6 +276,181 @@ class TestErrorHandling:
             parse_config(config_text)
 
 
+class TestRepeatedSections:
+    """Tests for repeated sections, each applied as its own operation."""
+
+    def test_repeated_config_sections(self):
+        """Test that repeated config sections become separate ordered operations."""
+        config_text = textwrap.dedent(
+            """
+            [config:set_param]
+            web.base.url = https://staging.example.com
+
+            [model:ir.mail_server]
+            active = False
+
+            [config:set_param]
+            mail.catchall.domain =
+        """
+        )
+        config = parse_config(config_text)
+        assert len(config) == 3
+        first, second, third = config.operations
+        assert isinstance(first, ConfigParamOperation)
+        assert first.identifier == "set_param"
+        assert first.fields == {"web.base.url": "https://staging.example.com"}
+        assert isinstance(second, ModelOperation)
+        assert second.identifier == "ir.mail_server"
+        assert second.fields == {"active": "False"}
+        assert isinstance(third, ConfigParamOperation)
+        assert third.identifier == "set_param"
+        assert third.fields == {"mail.catchall.domain": None}
+
+    def test_repeated_record_sections(self):
+        """Test that repeated record sections are not merged."""
+        config_text = textwrap.dedent(
+            """
+            [record:base.user_admin]
+            active = False
+
+            [model:res.users]
+            login = changed
+
+            [record:base.user_admin]
+            active = True
+            _table = custom_users
+        """
+        )
+        config = parse_config(config_text)
+        assert [str(op) for op in config] == [
+            "record:base.user_admin",
+            "model:res.users",
+            "record:base.user_admin",
+        ]
+        assert config.operations[0].fields == {"active": "False"}
+        assert config.operations[0].table is None
+        assert config.operations[2].fields == {"active": "True"}
+        assert config.operations[2].table == "custom_users"
+
+    def test_repeated_model_sections_back_to_back(self):
+        """Test that consecutive repeated model sections keep the same key."""
+        config_text = textwrap.dedent(
+            """
+            [model:ir.cron]
+            active = False
+
+            [model:ir.cron]
+            active = True
+        """
+        )
+        config = parse_config(config_text)
+        assert len(config) == 2
+        assert all(isinstance(op, ModelOperation) for op in config)
+        assert all(op.identifier == "ir.cron" for op in config)
+        assert config.operations[0].fields == {"active": "False"}
+        assert config.operations[1].fields == {"active": "True"}
+
+    def test_duplicate_key_within_occurrence_raises_error(self):
+        """Test that duplicate keys within a single occurrence still fail."""
+        config_text = textwrap.dedent(
+            """
+            [config:set_param]
+            key = one
+
+            [config:set_param]
+            key = two
+            key = three
+        """
+        )
+        with pytest.raises(
+            ConfigParseError,
+            match=r"option 'key' in section 'config:set_param' already exists",
+        ):
+            parse_config(config_text)
+
+    def test_invalid_repeated_section_uses_real_name(self):
+        """Test that errors report the section name as written by the user."""
+        config_text = textwrap.dedent(
+            """
+            [model:ir.cron]
+            active = False
+
+            [invalid_section]
+            field = value
+
+            [invalid_section]
+            field = value
+        """
+        )
+        with pytest.raises(
+            InvalidSectionError, match=r"Invalid section name: 'invalid_section'\."
+        ):
+            parse_config(config_text)
+
+    def test_repeated_config_section_with_table_uses_real_name(self):
+        """Test that _table errors on a repeated section report the real name."""
+        config_text = textwrap.dedent(
+            """
+            [config:set_param]
+            key = value
+
+            [config:set_param]
+            _table = custom
+        """
+        )
+        with pytest.raises(
+            InvalidSectionError,
+            match=r"Config sections cannot have _table attribute: 'config:set_param'$",
+        ):
+            parse_config(config_text)
+
+    def test_bracketed_values_are_not_section_headers(self):
+        """Test that values and continuation lines with brackets are kept as is."""
+        config_text = textwrap.dedent(
+            """
+            [config:set_param]
+            first = [config:set_param]
+            multi = line one
+                [model:ir.cron]
+        """
+        )
+        config = parse_config(config_text)
+        assert len(config) == 1
+        assert config.operations[0].fields == {
+            "first": "[config:set_param]",
+            "multi": "line one\n[model:ir.cron]",
+        }
+
+    def test_parser_reuse_with_repeated_sections(self):
+        """Test that occurrence tracking is reset between parses."""
+        parser = ConfidooConfigParser()
+        content = "[model:a]\nf = 1\n[model:a]\nf = 2\n"
+        first = parser.parse(content)
+        second = parser.parse(content)
+        assert first.operations == second.operations
+        assert [op.fields for op in second] == [{"f": "1"}, {"f": "2"}]
+
+    def test_default_section_is_unaffected(self):
+        """Test that DEFAULT values are still inherited by every section."""
+        config_text = textwrap.dedent(
+            """
+            [DEFAULT]
+            shared = yes
+
+            [model:a]
+            f = 1
+
+            [model:a]
+            f = 2
+        """
+        )
+        config = parse_config(config_text)
+        assert [op.fields for op in config] == [
+            {"f": "1", "shared": "yes"},
+            {"f": "2", "shared": "yes"},
+        ]
+
+
 class TestParserClass:
     """Tests for the ConfidooConfigParser class."""
 

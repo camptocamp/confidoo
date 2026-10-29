@@ -9,14 +9,15 @@ This module provides data models and parsing logic for Confidoo INI configuratio
 from __future__ import annotations
 
 import re
-from configparser import ConfigParser
+from configparser import ConfigParser, DuplicateOptionError
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ConfigParseError, InvalidSectionError
 
 if TYPE_CHECKING:
+    from re import Match, Pattern
     from typing import TextIO
 
 
@@ -130,6 +131,108 @@ class ParsedConfig:
         return len(self.operations)
 
 
+class _SectionOccurrenceMatch:
+    """Section header match whose ``header`` group is a unique internal name.
+
+    Wraps the real :class:`re.Match` produced by ``ConfigParser.SECTCRE`` and
+    only overrides the ``header`` group, which is what ``ConfigParser`` uses as
+    the section name.
+    """
+
+    __slots__ = ("_match", "_header")
+
+    def __init__(self, match: Match[str], header: str) -> None:
+        self._match = match
+        self._header = header
+
+    def group(self, *groups: int | str) -> Any:
+        if len(groups) == 1 and groups[0] == "header":
+            return self._header
+        return self._match.group(*groups)  # pragma: no cover
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover
+        return getattr(self._match, name)
+
+
+class _SectionOccurrenceRegex:
+    """Stand-in for ``ConfigParser.SECTCRE`` that gives each header occurrence
+    a unique internal name.
+
+    ``ConfigParser`` only calls ``SECTCRE.match()`` on lines it has already
+    decided are not continuation lines, so section headers are recognised
+    exactly as ``ConfigParser`` itself would recognise them. Values and
+    continuation lines containing brackets are never touched.
+    """
+
+    __slots__ = ("_pattern", "_parser")
+
+    def __init__(self, pattern: Pattern[str], parser: _OrderedSectionsParser) -> None:
+        self._pattern = pattern
+        self._parser = parser
+
+    def match(
+        self, string: str, *args: Any
+    ) -> _SectionOccurrenceMatch | Match[str] | None:
+        match = self._pattern.match(string, *args)
+        if match is None:
+            return None
+        header = match.group("header")
+        # Leave [DEFAULT] handling untouched
+        if header == self._parser.default_section:
+            return match
+        return _SectionOccurrenceMatch(match, self._parser._register_section(header))
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover
+        return getattr(self._pattern, name)
+
+
+class _OrderedSectionsParser(ConfigParser):
+    """``ConfigParser`` that keeps every occurrence of a section separately.
+
+    The stock ``ConfigParser`` either rejects repeated sections (``strict=True``)
+    or merges them into a single section (``strict=False``), which would lose
+    the file order and silently override keys. Instead, while reading, each
+    section header occurrence is stored under a unique internal name, and the
+    real name can be recovered with :meth:`real_section_name`.
+
+    Since every occurrence is its own internal section, ``strict`` mode still
+    rejects duplicate keys within a single occurrence.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._real_section_names: dict[str, str] = {}
+
+    def _register_section(self, real_name: str) -> str:
+        """Register a new occurrence of a section and return its internal name."""
+        internal_name = f"{real_name}\x00{len(self._real_section_names)}"
+        self._real_section_names[internal_name] = real_name
+        return internal_name
+
+    def real_section_name(self, section: str) -> str:
+        """Return the section name as written in the configuration file."""
+        return self._real_section_names.get(section, section)
+
+    def clear(self) -> None:
+        super().clear()
+        self._real_section_names = {}
+
+    def _read(self, fp: Any, fpname: str) -> None:
+        # Only hook the section regex while reading, so that any other usage of
+        # SECTCRE (e.g. key validation when writing) keeps the stock behaviour.
+        sectcre = _SectionOccurrenceRegex(type(self).SECTCRE, self)
+        self.SECTCRE = sectcre  # ty: ignore[invalid-assignment]
+        try:
+            super()._read(fp, fpname)  # ty: ignore[unresolved-attribute]
+        except DuplicateOptionError as e:
+            # Report the real section name instead of the internal one
+            raise DuplicateOptionError(
+                self.real_section_name(e.section), e.option, e.source, e.lineno
+            ) from None
+        finally:
+            del self.SECTCRE
+
+
 class ConfidooConfigParser:
     """Parser for Confidoo INI configuration files.
 
@@ -138,12 +241,13 @@ class ConfidooConfigParser:
     - [record:xml_id] - Record-specific settings
     - [config:set_param] - System parameter settings
 
-    Preserves section order as they appear in the file.
+    Preserves section order as they appear in the file. Sections may be
+    repeated: each occurrence becomes its own operation, in file order.
     """
 
     def __init__(self) -> None:
         """Initialize the parser."""
-        self._parser = ConfigParser(
+        self._parser = _OrderedSectionsParser(
             # Disable variable interpolation
             interpolation=None,
             # Support empty values (e.g., param =)
@@ -193,21 +297,22 @@ class ConfidooConfigParser:
         """Build ParsedConfig from the internal ConfigParser.
 
         Operations are processed in the order they appear in the file.
-        ConfigParser maintains insertion order since Python 3.7.
+        ConfigParser maintains insertion order since Python 3.7, and repeated
+        sections are kept as separate (internally renamed) sections.
         """
         config = ParsedConfig()
 
-        for section_name in self._parser.sections():
-            operation = self._parse_section(section_name)
+        for internal_name in self._parser.sections():
+            operation = self._parse_section(internal_name)
             config.add_operation(operation)
 
         return config
 
-    def _parse_section(self, section_name: str) -> ConfigOperation:
-        """Parse a single section.
+    def _parse_section(self, internal_name: str) -> ConfigOperation:
+        """Parse a single section occurrence.
 
         Args:
-            section_name: Raw section name from INI file
+            internal_name: Internal (unique) name of the section occurrence
 
         Returns:
             Appropriate ConfigOperation subclass instance
@@ -215,6 +320,7 @@ class ConfidooConfigParser:
         Raises:
             InvalidSectionError: If section name doesn't match expected pattern
         """
+        section_name = self._parser.real_section_name(internal_name)
         match = SECTION_PATTERN.match(section_name)
         if not match:
             msg = (
@@ -232,7 +338,7 @@ class ConfidooConfigParser:
             raise InvalidSectionError(msg)
 
         # Extract fields and special attributes
-        fields, table = self._extract_fields(section_name)
+        fields, table = self._extract_fields(internal_name, section_name)
 
         # Create appropriate operation type
         operation_type = OperationType(operation_type_str)
@@ -252,12 +358,13 @@ class ConfidooConfigParser:
             raise InvalidSectionError(msg)
 
     def _extract_fields(
-        self, section_name: str
+        self, internal_name: str, section_name: str
     ) -> tuple[dict[str, str | None], str | None]:
-        """Extract fields and table attribute from a section.
+        """Extract fields and table attribute from a section occurrence.
 
         Args:
-            section_name: Section name to extract fields from
+            internal_name: Internal (unique) name of the section occurrence
+            section_name: Section name as written in the file (for error messages)
 
         Returns:
             Tuple of (fields_dict, table_name)
@@ -267,7 +374,7 @@ class ConfidooConfigParser:
         fields: dict[str, str | None] = {}
         table: str | None = None
 
-        for key, value in self._parser.items(section_name):
+        for key, value in self._parser.items(internal_name):
             # Handle special _table attribute
             if key == RESERVED_TABLE_FIELD:
                 if value is None or value.strip() == "":

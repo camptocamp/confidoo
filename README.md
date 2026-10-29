@@ -135,6 +135,24 @@ database.expiration_reason =
 database.expiration_date =
 ```
 
+### Repeated Sections
+
+Sections can be repeated. Each occurrence is a separate operation, and operations are
+applied in the order they appear in the file:
+
+```ini
+[config:set_param]
+web.base.url = https://staging.example.com
+
+[model:ir.mail_server]
+active = False
+
+[config:set_param]
+mail.catchall.domain =
+```
+
+A key can't be repeated within a single section occurrence.
+
 ## Complete Example
 
 ```ini

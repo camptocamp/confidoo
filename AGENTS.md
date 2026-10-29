@@ -60,6 +60,12 @@ Main parser class that processes INI files with special section syntax.
 
 **Features:**
 - Preserves insertion order of sections (critical for correct application sequence)
+- Allows repeated sections: each occurrence becomes its own operation, in file order
+  (never merged). Internally, `_OrderedSectionsParser` (a `ConfigParser` subclass)
+  hooks `SECTCRE` while reading so each header occurrence is stored under a unique
+  internal name, mapped back to the real name when building operations and in error
+  messages. `[DEFAULT]` is left untouched, and duplicate keys within a single
+  occurrence are still rejected (strict mode)
 - Supports variable interpolation disabled for literal values
 - Allows empty values for unsetting parameters
 
@@ -351,6 +357,10 @@ Where `type` is one of:
 - `record` - Record-specific settings
 - `config` - System parameters
 
+Sections may be repeated (e.g. several `[config:set_param]` sections). Each
+occurrence is a separate operation, applied in the order it appears in the file.
+Duplicate keys within a single occurrence are an error.
+
 ### Special Attributes
 
 - **`_table`**: Specifies custom database table name (for model and record sections only)
@@ -509,7 +519,7 @@ uv run pytest
 
 ### Architectural Considerations
 
-- **Ordered Operations**: The parser maintains strict ordering of operations to ensure correct application sequence
+- **Ordered Operations**: The parser maintains strict ordering of operations to ensure correct application sequence. Repeated sections are kept as separate operations at their position in the file, rather than merged
 - **Immutable Operations**: All operation classes are frozen dataclasses to prevent accidental modification
 - **Separation of Concerns**: The design separates parsing (config.py), database (db.py), and application logic (main.py)
 - **PostgreSQL-Specific**: Current implementation uses PostgreSQL-specific features (UPSERT with ON CONFLICT)
