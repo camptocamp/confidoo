@@ -12,7 +12,7 @@ import re
 from configparser import ConfigParser
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from .exceptions import ConfigParseError, InvalidSectionError
 
@@ -43,7 +43,8 @@ class ConfigOperation:
     identifier, and field values.
     """
 
-    operation_type: OperationType
+    operation_type: ClassVar[OperationType]
+
     identifier: str
     fields: dict[str, str | None]
     table: str | None = None
@@ -65,14 +66,7 @@ class ModelOperation(ConfigOperation):
     Example: [model:ir.mail_server]
     """
 
-    def __init__(
-        self, identifier: str, fields: dict[str, str | None], table: str | None = None
-    ) -> None:
-        object.__setattr__(self, "operation_type", OperationType.MODEL)
-        object.__setattr__(self, "identifier", identifier)
-        object.__setattr__(self, "fields", fields)
-        object.__setattr__(self, "table", table)
-        self.__post_init__()
+    operation_type: ClassVar[OperationType] = OperationType.MODEL
 
 
 @dataclass(slots=True, frozen=True)
@@ -82,14 +76,7 @@ class RecordOperation(ConfigOperation):
     Example: [record:customer_module.sftp_server]
     """
 
-    def __init__(
-        self, identifier: str, fields: dict[str, str | None], table: str | None = None
-    ) -> None:
-        object.__setattr__(self, "operation_type", OperationType.RECORD)
-        object.__setattr__(self, "identifier", identifier)
-        object.__setattr__(self, "fields", fields)
-        object.__setattr__(self, "table", table)
-        self.__post_init__()
+    operation_type: ClassVar[OperationType] = OperationType.RECORD
 
 
 @dataclass(slots=True, frozen=True)
@@ -99,12 +86,14 @@ class ConfigParamOperation(ConfigOperation):
     Example: [config:set_param]
     """
 
-    def __init__(self, identifier: str, fields: dict[str, str | None]) -> None:
-        object.__setattr__(self, "operation_type", OperationType.CONFIG)
-        object.__setattr__(self, "identifier", identifier)
-        object.__setattr__(self, "fields", fields)
-        object.__setattr__(self, "table", None)
-        self.__post_init__()
+    operation_type: ClassVar[OperationType] = OperationType.CONFIG
+
+
+# Operation class for each section type
+OPERATION_CLASSES: dict[OperationType, type[ConfigOperation]] = {
+    cls.operation_type: cls
+    for cls in (ModelOperation, RecordOperation, ConfigParamOperation)
+}
 
 
 @dataclass(slots=True)
@@ -224,7 +213,7 @@ class ConfidooConfigParser:
             )
             raise InvalidSectionError(msg)
 
-        operation_type_str = match.group("type")
+        operation_type = OperationType(match.group("type"))
         identifier = match.group("identifier").strip()
 
         if not identifier:
@@ -234,22 +223,12 @@ class ConfidooConfigParser:
         # Extract fields and special attributes
         fields, table = self._extract_fields(section_name)
 
-        # Create appropriate operation type
-        operation_type = OperationType(operation_type_str)
-
-        if operation_type == OperationType.MODEL:
-            return ModelOperation(identifier=identifier, fields=fields, table=table)
-        elif operation_type == OperationType.RECORD:
-            return RecordOperation(identifier=identifier, fields=fields, table=table)
-        elif operation_type == OperationType.CONFIG:
-            if table is not None:
-                msg = f"Config sections cannot have _table attribute: {section_name!r}"
-                raise InvalidSectionError(msg)
-            return ConfigParamOperation(identifier=identifier, fields=fields)
-        else:
-            # Should never happen due to regex and enum validation
-            msg = f"Unknown section type: {operation_type_str}"
+        if operation_type == OperationType.CONFIG and table is not None:
+            msg = f"Config sections cannot have _table attribute: {section_name!r}"
             raise InvalidSectionError(msg)
+
+        operation_class = OPERATION_CLASSES[operation_type]
+        return operation_class(identifier=identifier, fields=fields, table=table)
 
     def _extract_fields(
         self, section_name: str
