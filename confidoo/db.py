@@ -203,8 +203,8 @@ class OdooDatabase:
     def _close_connection(self) -> None:
         """Close the cursor and connection, if open, ignoring errors.
 
-        Used to release resources when ``__enter__`` fails, so that
-        cleanup errors don't mask the original exception.
+        Cleanup errors are ignored so that they don't mask the original
+        exception, or a failed commit.
         """
         cr, conn = self._cr, self._conn
         self._cr = None
@@ -244,9 +244,7 @@ class OdooDatabase:
                 self._conn.rollback()
         finally:
             # Always close cursor and connection
-            if self._cr:
-                self._cr.close()
-            self._conn.close()
+            self._close_connection()
 
         # Don't suppress exceptions
         return False
