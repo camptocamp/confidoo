@@ -7,8 +7,8 @@ import logging
 from pathlib import Path
 from textwrap import dedent
 
-import psycopg2
 import pytest
+from psycopg2 import errorcodes, errors
 
 from confidoo.exceptions import (
     InvalidSectionError,
@@ -204,7 +204,7 @@ def test_apply_nonexistent_model(odoo_db):
     __, db_params = odoo_db
 
     # psycopg2 errors propagate directly, not wrapped in DatabaseError
-    with pytest.raises(psycopg2.errors.UndefinedTable) as exc_info:
+    with pytest.raises(errors.lookup(errorcodes.UNDEFINED_TABLE)) as exc_info:
         Confidoo.apply_config(
             database=db_params["database"],
             user=db_params["user"],
