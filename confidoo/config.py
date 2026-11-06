@@ -33,6 +33,14 @@ FIELD_IDENTIFIER_PATTERN = re.compile(
 # Reserved field name for custom table specification
 RESERVED_TABLE_FIELD = "_table"
 
+# Reserved field name for the behaviour of field sections when no row matches
+RESERVED_ON_MISSING_FIELD = "_on_missing"
+
+# Allowed _on_missing values: fail (raise, roll back everything), error (log an
+# error and go on), warning (log a warning and go on).
+# Supported by record sections (default: fail) and field sections (default: error)
+ON_MISSING_CHOICES = ("fail", "error", "warning")
+
 
 class OperationType(str, Enum):
     """Types of configuration operations."""
@@ -86,6 +94,9 @@ class RecordOperation(ConfigOperation):
 
     operation_type: ClassVar[OperationType] = OperationType.RECORD
 
+    # What to do when the XMLID cannot be resolved: see ON_MISSING_CHOICES
+    on_missing: str = "fail"
+
 
 @dataclass(slots=True, frozen=True)
 class FieldOperation(ConfigOperation):
@@ -97,6 +108,9 @@ class FieldOperation(ConfigOperation):
     """
 
     operation_type: ClassVar[OperationType] = OperationType.FIELD
+
+    # What to do when no record matches: see ON_MISSING_CHOICES
+    on_missing: str = "error"
 
     def __post_init__(self) -> None:
         """Validate operation data, including the identifier format."""
@@ -279,6 +293,33 @@ class ConfidooConfigParser:
             raise InvalidSectionError(msg)
 
         operation_class = OPERATION_CLASSES[operation_type]
+        if operation_type in (OperationType.RECORD, OperationType.FIELD):
+            default = "fail" if operation_type == OperationType.RECORD else "error"
+            on_missing = fields.pop(RESERVED_ON_MISSING_FIELD, None) or default
+            if on_missing not in ON_MISSING_CHOICES:
+                msg = (
+                    f"Invalid {RESERVED_ON_MISSING_FIELD} value {on_missing!r} in "
+                    f"section {section_name!r}. "
+                    f"Expected one of: {', '.join(ON_MISSING_CHOICES)}"
+                )
+                raise InvalidSectionError(msg)
+            missing_class = (
+                RecordOperation
+                if operation_type == OperationType.RECORD
+                else FieldOperation
+            )
+            return missing_class(
+                identifier=identifier,
+                fields=fields,
+                table=table,
+                on_missing=on_missing,
+            )
+        if RESERVED_ON_MISSING_FIELD in fields:
+            msg = (
+                f"{RESERVED_ON_MISSING_FIELD} is only supported in record and "
+                f"field sections: {section_name!r}"
+            )
+            raise InvalidSectionError(msg)
         return operation_class(identifier=identifier, fields=fields, table=table)
 
     def _extract_fields(

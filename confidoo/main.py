@@ -24,7 +24,11 @@ from .config import (
     parse_config,
 )
 from .db import ConnectionParams, OdooDatabase
-from .exceptions import AmbiguousRecordError, RecordNotFoundError
+from .exceptions import (
+    AmbiguousRecordError,
+    RecordNotFoundError,
+    XmlIdNotFoundError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -298,11 +302,30 @@ class Confidoo:
         rowcount = self._update(table, operation.fields)
         logger.info("✓ Updated %d row(s)", rowcount)
 
+    @staticmethod
+    def _handle_missing(on_missing: str, error: Exception) -> None:
+        """Apply the _on_missing policy when a targeted record does not exist.
+
+        Args:
+            on_missing: "fail" (raise), "error" or "warning" (log and go on)
+            error: Exception describing the missing record
+
+        Raises:
+            Exception: The given error, if on_missing is "fail"
+        """
+        if on_missing == "fail":
+            raise error
+        level = logging.ERROR if on_missing == "error" else logging.WARNING
+        logger.log(level, "%s", error)
+
     def _apply_record_operation(self, operation: RecordOperation) -> None:
         """Apply settings to a specific record by XMLID.
 
         Args:
             operation: Record operation to apply
+
+        Raises:
+            XmlIdNotFoundError: If the XMLID is unknown and on_missing is "fail"
 
         Example:
             [record:base.user_admin]
@@ -313,7 +336,11 @@ class Confidoo:
             return  # Nothing to update
 
         # Resolve table name from the XMLID model, not the operation identifier
-        model, res_id = self.db.resolve_xmlid(operation.identifier)
+        try:
+            model, res_id = self.db.resolve_xmlid(operation.identifier)
+        except XmlIdNotFoundError as exc:
+            self._handle_missing(operation.on_missing, exc)
+            return
         table = operation.table or self.db.resolve_table_name(model)
 
         if not self._update(table, operation.fields, ("id", res_id)):
@@ -334,7 +361,7 @@ class Confidoo:
             operation: Field operation to apply
 
         Raises:
-            RecordNotFoundError: If no record matches
+            RecordNotFoundError: If no record matches and on_missing is "fail"
             AmbiguousRecordError: If more than one record matches (the
                 transaction is rolled back, so nothing is changed)
 
@@ -356,7 +383,8 @@ class Confidoo:
                 f"No record found in {table} where "
                 f"{operation.column} = {operation.value!r}"
             )
-            raise RecordNotFoundError(msg)
+            self._handle_missing(operation.on_missing, RecordNotFoundError(msg))
+            return
         if rowcount > 1:
             msg = (
                 f"{operation.column} = {operation.value!r} matched {rowcount} "

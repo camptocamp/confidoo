@@ -140,6 +140,33 @@ class TestParseFieldSection:
         config = parse_config("[field:m.m:k=v]\n_table = custom\nx = 1\n")
         assert config.operations[0].table == "custom"
 
+    def test_parse_field_on_missing(self):
+        """Test _on_missing parsing, default and validation."""
+        default = parse_config("[field:m.m:k=v]\nx = 1\n").operations[0]
+        assert isinstance(default, FieldOperation)
+        assert default.on_missing == "error"
+        op = parse_config("[field:m.m:k=v]\n_on_missing = warning\nx = 1\n")
+        warn = op.operations[0]
+        assert isinstance(warn, FieldOperation)
+        assert warn.on_missing == "warning"
+        assert warn.fields == {"x": "1"}
+        with pytest.raises(InvalidSectionError, match="_on_missing"):
+            parse_config("[field:m.m:k=v]\n_on_missing = nope\n")
+        with pytest.raises(InvalidSectionError, match="only supported"):
+            parse_config("[model:a.b]\n_on_missing = fail\n")
+
+    def test_parse_record_on_missing(self):
+        """Test _on_missing on record sections (default: fail)."""
+        default = parse_config("[record:a.b]\nx = 1\n").operations[0]
+        assert isinstance(default, RecordOperation)
+        assert default.on_missing == "fail"
+        op = parse_config("[record:a.b]\n_on_missing = error\nx = 1\n").operations[0]
+        assert isinstance(op, RecordOperation)
+        assert op.on_missing == "error"
+        assert op.fields == {"x": "1"}
+        with pytest.raises(InvalidSectionError, match="_on_missing"):
+            parse_config("[record:a.b]\n_on_missing = nope\n")
+
     @pytest.mark.parametrize(
         "section", ["res.partner", "res.partner:tech_name", "res.partner:=v", ":k=v"]
     )

@@ -95,6 +95,10 @@ Represents settings for a specific record identified by XML ID.
 - `fields`: Dictionary of field names to values
 - `table`: Optional custom database table name (via `_table` attribute)
 
+`RecordOperation` and `FieldOperation` accept `_on_missing` (`fail` / `error` /
+`warning`, stored as `on_missing`) for a record that cannot be found: unknown XMLID
+(default `fail`) or no matching row (default `error`). Handled by `Confidoo._handle_missing()`.
+
 ##### `FieldOperation`
 Represents settings for a record selected by a unique column.
 
@@ -103,7 +107,7 @@ Represents settings for a record selected by a unique column.
 **Attributes:** `model`, `column`, `value` (parsed from `identifier`), `fields`, `table`
 
 Applied as `UPDATE table SET fields WHERE column = value`; raises
-`RecordNotFoundError` on 0 rows and `AmbiguousRecordError` on more than 1.
+On 0 rows, `_on_missing` (`error` default / `warning` / `fail`) decides between logging and raising `RecordNotFoundError`; more than 1 row always raises `AmbiguousRecordError`.
 
 ##### `ConfigParamOperation`
 Represents system parameter configuration.

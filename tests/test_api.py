@@ -299,13 +299,56 @@ def test_apply_field_operation(odoo_db):
     assert cursor.fetchone()["notification_type"] == "email"
 
 
-def test_apply_field_operation_not_found(odoo_db):
-    """Test that an unmatched value raises."""
+@pytest.mark.parametrize(
+    ("on_missing", "level"),
+    [(None, logging.ERROR), ("error", logging.ERROR), ("warning", logging.WARNING)],
+)
+def test_apply_field_operation_not_found_logs(odoo_db, caplog, on_missing, level):
+    """Test that an unmatched value is logged and the next section still runs."""
+    __, db_params = odoo_db
+    option = f"_on_missing = {on_missing}\n" if on_missing else ""
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(
+            **db_params,
+            config_content=(
+                f"[field:res.users:login=__nope__]\n{option}active = True\n"
+                "[config:set_param]\nconfidoo.after = 1\n"
+            ),
+        )
+    problems = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert problems[0].levelno == level
+    assert any("confidoo.after" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("on_missing", "level"), [("error", logging.ERROR), ("warning", logging.WARNING)]
+)
+def test_apply_record_unknown_xmlid_logs(odoo_db, caplog, on_missing, level):
+    """Test that _on_missing makes an unknown XMLID non-fatal for record sections."""
+    __, db_params = odoo_db
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(
+            **db_params,
+            config_content=(
+                f"[record:confidoo_test.nope]\n_on_missing = {on_missing}\nname = X\n"
+                "[config:set_param]\nconfidoo.after = 1\n"
+            ),
+        )
+    problems = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert problems[0].levelno == level
+    assert "confidoo_test.nope" in problems[0].getMessage()
+    assert any("confidoo.after" in r.getMessage() for r in caplog.records)
+
+
+def test_apply_field_operation_not_found_fail(odoo_db):
+    """Test that _on_missing = fail raises."""
     __, db_params = odoo_db
     with pytest.raises(RecordNotFoundError):
         Confidoo.apply_config(
             **db_params,
-            config_content="[field:res.users:login=__nope__]\nactive = True\n",
+            config_content=(
+                "[field:res.users:login=__nope__]\n_on_missing = fail\nactive = True\n"
+            ),
         )
 
 

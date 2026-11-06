@@ -127,6 +127,18 @@ _table = custom_table
 field_name = value
 ```
 
+### Missing Records
+
+`record:` sections raise an error when the XML ID cannot be resolved, which
+rolls back the whole configuration. Set `_on_missing` to carry on instead
+(see [`_on_missing`](#records-selected-by-a-unique-field) below):
+
+```ini
+[record:my_module.optional_record]
+_on_missing = warning
+name = Maybe Here
+```
+
 ### Records Selected by a Unique Field
 
 Select a **specific record** by a unique column (e.g. a technical name) when
@@ -137,9 +149,26 @@ it has no XML ID. The section is `[field:model:column=value]`:
 name = My Partner
 ```
 
-The column must match **exactly one** row: no match raises an error, and so
-does more than one match (the transaction is rolled back). `_table` is
-supported as for `record:`.
+The column should match **exactly one** row. More than one match always
+raises an error. When no row matches, `_on_missing` decides what happens:
+
+| `_on_missing`       | Behaviour                                             |
+|---------------------|-------------------------------------------------------|
+| `error` *(default)* | log an error and carry on with the next section       |
+| `warning`           | log a warning and carry on                            |
+| `fail`              | raise an error and roll back the whole configuration  |
+
+```ini
+[field:res.partner:tech_name=my_partner]
+_on_missing = fail
+name = My Partner
+```
+
+`_table` is supported as for `record:`.
+
+**Failures are all-or-nothing:** the whole configuration runs in a single
+transaction, so any raised error rolls back every section, including those
+already applied.
 
 ### System Parameters
 
