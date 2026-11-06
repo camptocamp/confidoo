@@ -21,7 +21,14 @@ if TYPE_CHECKING:
 
 
 # Section pattern: [type:identifier]
-SECTION_PATTERN = re.compile(r"^(?P<type>model|record|config):(?P<identifier>.+)$")
+SECTION_PATTERN = re.compile(
+    r"^(?P<type>model|record|field|config):(?P<identifier>.+)$"
+)
+
+# Identifier of a field section: model:column=value
+FIELD_IDENTIFIER_PATTERN = re.compile(
+    r"^(?P<model>[^:=\s]+):(?P<column>[^:=\s]+)=(?P<value>.+)$"
+)
 
 # Reserved field name for custom table specification
 RESERVED_TABLE_FIELD = "_table"
@@ -32,6 +39,7 @@ class OperationType(str, Enum):
 
     MODEL = "model"
     RECORD = "record"
+    FIELD = "field"
     CONFIG = "config"
 
 
@@ -80,6 +88,48 @@ class RecordOperation(ConfigOperation):
 
 
 @dataclass(slots=True, frozen=True)
+class FieldOperation(ConfigOperation):
+    """Record configuration operation selecting the record by a unique field.
+
+    The identifier is ``model:column=value``, e.g.
+    [field:res.partner:tech_name=my_partner] updates the record(s) of
+    ``res.partner`` whose ``tech_name`` column equals ``my_partner``.
+    """
+
+    operation_type: ClassVar[OperationType] = OperationType.FIELD
+
+    def __post_init__(self) -> None:
+        """Validate operation data, including the identifier format."""
+        ConfigOperation.__post_init__(self)
+        if not FIELD_IDENTIFIER_PATTERN.match(self.identifier):
+            msg = (
+                f"Invalid field identifier: {self.identifier!r}. "
+                f"Expected format: [field:model:column=value]"
+            )
+            raise InvalidSectionError(msg)
+
+    @property
+    def model(self) -> str:
+        """Odoo model name of the targeted record."""
+        return self._match().group("model")
+
+    @property
+    def column(self) -> str:
+        """Column used to select the record."""
+        return self._match().group("column")
+
+    @property
+    def value(self) -> str:
+        """Value the column must match."""
+        return self._match().group("value")
+
+    def _match(self) -> re.Match[str]:
+        match = FIELD_IDENTIFIER_PATTERN.match(self.identifier)
+        assert match is not None  # validated in __post_init__
+        return match
+
+
+@dataclass(slots=True, frozen=True)
 class ConfigParamOperation(ConfigOperation):
     """System parameter configuration operation.
 
@@ -92,7 +142,7 @@ class ConfigParamOperation(ConfigOperation):
 # Operation class for each section type
 OPERATION_CLASSES: dict[OperationType, type[ConfigOperation]] = {
     cls.operation_type: cls
-    for cls in (ModelOperation, RecordOperation, ConfigParamOperation)
+    for cls in (ModelOperation, RecordOperation, FieldOperation, ConfigParamOperation)
 }
 
 
@@ -125,6 +175,7 @@ class ConfidooConfigParser:
     Parses INI files with special section syntax:
     - [model:model_name] - Model-wide settings
     - [record:xml_id] - Record-specific settings
+    - [field:model:column=value] - Record selected by a unique field
     - [config:set_param] - System parameter settings
 
     Preserves section order as they appear in the file.
@@ -209,7 +260,7 @@ class ConfidooConfigParser:
             msg = (
                 f"Invalid section name: {section_name!r}. "
                 f"Expected format: [type:identifier] where type is one of: "
-                f"model, record, config"
+                f"model, record, field, config"
             )
             raise InvalidSectionError(msg)
 

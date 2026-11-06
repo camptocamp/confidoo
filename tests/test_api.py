@@ -11,7 +11,9 @@ import pytest
 from psycopg2 import errorcodes, errors
 
 from confidoo.exceptions import (
+    AmbiguousRecordError,
     InvalidSectionError,
+    RecordNotFoundError,
     XmlIdNotFoundError,
 )
 from confidoo.main import Confidoo
@@ -282,6 +284,39 @@ def test_apply_stale_xmlid_warns(odoo_db, caplog):
     assert "res.partner,2147483647" in message
     assert "res_partner" in message
     assert not any(r.getMessage() == "✓ Updated" for r in caplog.records)
+
+
+def test_apply_field_operation(odoo_db):
+    """Test selecting a record by a unique field."""
+    cursor, db_params = odoo_db
+    cursor.execute("SELECT login FROM res_users WHERE id = 2")
+    login = cursor.fetchone()["login"]
+    Confidoo.apply_config(
+        **db_params,
+        config_content=f"[field:res.users:login={login}]\nnotification_type = email\n",
+    )
+    cursor.execute("SELECT notification_type FROM res_users WHERE id = 2")
+    assert cursor.fetchone()["notification_type"] == "email"
+
+
+def test_apply_field_operation_not_found(odoo_db):
+    """Test that an unmatched value raises."""
+    __, db_params = odoo_db
+    with pytest.raises(RecordNotFoundError):
+        Confidoo.apply_config(
+            **db_params,
+            config_content="[field:res.users:login=__nope__]\nactive = True\n",
+        )
+
+
+def test_apply_field_operation_ambiguous(odoo_db):
+    """Test that a non-unique match raises and rolls back."""
+    cursor, db_params = odoo_db
+    with pytest.raises(AmbiguousRecordError):
+        Confidoo.apply_config(
+            **db_params,
+            config_content="[field:res.partner:active=true]\ncomment = x\n",
+        )
 
 
 @pytest.mark.parametrize("config_content", ["", "\n", "   \n\t\n"])

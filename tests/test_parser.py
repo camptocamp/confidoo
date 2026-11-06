@@ -10,6 +10,7 @@ import pytest
 from confidoo.config import (
     ConfidooConfigParser,
     ConfigParamOperation,
+    FieldOperation,
     ModelOperation,
     OperationType,
     ParsedConfig,
@@ -110,6 +111,42 @@ class TestParseRecordSection:
         assert isinstance(operation, RecordOperation)
         assert operation.table == "custom_table"
         assert "_table" not in operation.fields
+
+
+class TestParseFieldSection:
+    """Tests for parsing field sections."""
+
+    def test_parse_simple_field(self):
+        """Test parsing a field section."""
+        config = parse_config("[field:res.partner:tech_name=my_partner]\nname = X\n")
+        operation = config.operations[0]
+        assert isinstance(operation, FieldOperation)
+        assert operation.operation_type == OperationType.FIELD
+        assert operation.model == "res.partner"
+        assert operation.column == "tech_name"
+        assert operation.value == "my_partner"
+        assert operation.fields == {"name": "X"}
+
+    def test_parse_field_value_with_separators(self):
+        """Test that the value may contain ':' and '='."""
+        config = parse_config("[field:ir.model:name=a:b=c]\nx = 1\n")
+        operation = config.operations[0]
+        assert isinstance(operation, FieldOperation)
+        assert operation.column == "name"
+        assert operation.value == "a:b=c"
+
+    def test_parse_field_with_table(self):
+        """Test parsing field section with custom table."""
+        config = parse_config("[field:m.m:k=v]\n_table = custom\nx = 1\n")
+        assert config.operations[0].table == "custom"
+
+    @pytest.mark.parametrize(
+        "section", ["res.partner", "res.partner:tech_name", "res.partner:=v", ":k=v"]
+    )
+    def test_parse_field_invalid_identifier(self, section):
+        """Test that malformed identifiers are rejected."""
+        with pytest.raises(InvalidSectionError, match="Invalid field identifier"):
+            parse_config(f"[field:{section}]\nx = 1\n")
 
 
 class TestParseConfigSection:

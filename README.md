@@ -127,6 +127,20 @@ _table = custom_table
 field_name = value
 ```
 
+### Records Selected by a Unique Field
+
+Select a **specific record** by a unique column (e.g. a technical name) when
+it has no XML ID. The section is `[field:model:column=value]`:
+
+```ini
+[field:res.partner:tech_name=my_partner]
+name = My Partner
+```
+
+The column must match **exactly one** row: no match raises an error, and so
+does more than one match (the transaction is rolled back). `_table` is
+supported as for `record:`.
+
 ### System Parameters
 
 Create or update system parameters:

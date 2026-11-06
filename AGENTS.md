@@ -95,6 +95,16 @@ Represents settings for a specific record identified by XML ID.
 - `fields`: Dictionary of field names to values
 - `table`: Optional custom database table name (via `_table` attribute)
 
+##### `FieldOperation`
+Represents settings for a record selected by a unique column.
+
+**Format**: `[field:model:column=value]`
+
+**Attributes:** `model`, `column`, `value` (parsed from `identifier`), `fields`, `table`
+
+Applied as `UPDATE table SET fields WHERE column = value`; raises
+`RecordNotFoundError` on 0 rows and `AmbiguousRecordError` on more than 1.
+
 ##### `ConfigParamOperation`
 Represents system parameter configuration.
 
@@ -252,6 +262,7 @@ Custom exception classes for error handling:
 - **`DatabaseConnectionError`**: Connection to database failed
 - **`NotOdooDatabaseError`**: Database validation failed (missing `ir_module_module` table)
 - **`OdooVersionError`**: Version detection failed (no longer raised; version detection is non-fatal. Kept for backwards compatibility)
+- **`RecordNotFoundError`** / **`AmbiguousRecordError`**: `field:` selector matched 0 / more than 1 rows
 - **`XmlIdNotFoundError`**: XMLID resolution failed (record not found in `ir_model_data`)
 - **`TransactionError`**: Transaction operation failed
 
@@ -352,6 +363,7 @@ All sections follow the pattern: `[type:identifier]`
 Where `type` is one of:
 - `model` - Model-wide settings
 - `record` - Record-specific settings
+- `field` - Record selected by a unique column
 - `config` - System parameters
 
 ### Special Attributes
