@@ -289,66 +289,56 @@ def test_apply_stale_xmlid_warns(odoo_db, caplog):
 def test_apply_field_operation(odoo_db):
     """Test selecting a record by a unique field."""
     cursor, db_params = odoo_db
-    cursor.execute("SELECT login FROM res_users WHERE id = 2")
-    login = cursor.fetchone()["login"]
+    cursor.execute("SELECT partner_id FROM res_users WHERE id = 2")
+    partner_id = cursor.fetchone()["partner_id"]
     Confidoo.apply_config(
         **db_params,
-        config_content=f"[field:res.users:login={login}]\nnotification_type = email\n",
+        config_content=f"[record:res.partner:id={partner_id}]\nref = confidoo\n",
     )
-    cursor.execute("SELECT notification_type FROM res_users WHERE id = 2")
-    assert cursor.fetchone()["notification_type"] == "email"
+    cursor.execute("SELECT ref FROM res_partner WHERE id = %s", (partner_id,))
+    assert cursor.fetchone()["ref"] == "confidoo"
 
 
 @pytest.mark.parametrize(
-    ("on_missing", "level"),
-    [(None, logging.ERROR), ("error", logging.ERROR), ("warning", logging.WARNING)],
+    ("section", "missing"),
+    [
+        ("record:res.users:login=__nope__", "__nope__"),
+        ("record:confidoo_test.nope", "confidoo_test.nope"),
+    ],
 )
-def test_apply_field_operation_not_found_logs(odoo_db, caplog, on_missing, level):
-    """Test that an unmatched value is logged and the next section still runs."""
-    __, db_params = odoo_db
-    option = f"_on_missing = {on_missing}\n" if on_missing else ""
-    with caplog.at_level(logging.INFO, logger="confidoo.main"):
-        Confidoo.apply_config(
-            **db_params,
-            config_content=(
-                f"[field:res.users:login=__nope__]\n{option}active = True\n"
-                "[config:set_param]\nconfidoo.after = 1\n"
-            ),
-        )
-    problems = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert problems[0].levelno == level
-    assert any("confidoo.after" in r.getMessage() for r in caplog.records)
-
-
-@pytest.mark.parametrize(
-    ("on_missing", "level"), [("error", logging.ERROR), ("warning", logging.WARNING)]
-)
-def test_apply_record_unknown_xmlid_logs(odoo_db, caplog, on_missing, level):
-    """Test that _on_missing makes an unknown XMLID non-fatal for record sections."""
+def test_apply_record_missing_warning(odoo_db, caplog, section, missing):
+    """Test that _on_missing = warning logs and the next section still runs."""
     __, db_params = odoo_db
     with caplog.at_level(logging.INFO, logger="confidoo.main"):
         Confidoo.apply_config(
             **db_params,
             config_content=(
-                f"[record:confidoo_test.nope]\n_on_missing = {on_missing}\nname = X\n"
+                f"[{section}]\n_on_missing = warning\nactive = True\n"
                 "[config:set_param]\nconfidoo.after = 1\n"
             ),
         )
     problems = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert problems[0].levelno == level
-    assert "confidoo_test.nope" in problems[0].getMessage()
+    assert len(problems) == 1
+    assert problems[0].levelno == logging.WARNING
+    assert missing in problems[0].getMessage()
     assert any("confidoo.after" in r.getMessage() for r in caplog.records)
 
 
-def test_apply_field_operation_not_found_fail(odoo_db):
-    """Test that _on_missing = fail raises."""
+@pytest.mark.parametrize(
+    ("section", "error"),
+    [
+        ("record:res.users:login=__nope__", RecordNotFoundError),
+        ("record:confidoo_test.nope", XmlIdNotFoundError),
+    ],
+)
+@pytest.mark.parametrize("option", ["", "_on_missing = fail\n"])
+def test_apply_record_missing_fails_by_default(odoo_db, section, error, option):
+    """Test that a missing record raises unless _on_missing = warning."""
     __, db_params = odoo_db
-    with pytest.raises(RecordNotFoundError):
+    with pytest.raises(error):
         Confidoo.apply_config(
             **db_params,
-            config_content=(
-                "[field:res.users:login=__nope__]\n_on_missing = fail\nactive = True\n"
-            ),
+            config_content=f"[{section}]\n{option}active = True\n",
         )
 
 
@@ -358,7 +348,7 @@ def test_apply_field_operation_ambiguous(odoo_db):
     with pytest.raises(AmbiguousRecordError):
         Confidoo.apply_config(
             **db_params,
-            config_content="[field:res.partner:active=true]\ncomment = x\n",
+            config_content="[record:res.partner:active=true]\ncomment = x\n",
         )
 
 

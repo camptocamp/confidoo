@@ -127,44 +127,44 @@ _table = custom_table
 field_name = value
 ```
 
+### Records Selected by a Unique Field
+
+Select a **specific record** by a unique column instead of an XML ID, which is
+useful for records that have none. The section is
+`[record:<model>:<column>=<value>]`:
+
+```ini
+[record:res.partner:tech_name=my_partner]
+name = My Partner
+```
+
+The column should match **exactly one** row. More than one match always raises
+an error. `_table` is supported as for XML ID records.
+
+> **Note:** a column like `tech_name` is usually added by a module, and it is
+> gone as soon as that module is uninstalled.
+
 ### Missing Records
 
-`record:` sections raise an error when the XML ID cannot be resolved, which
-rolls back the whole configuration. Set `_on_missing` to carry on instead
-(see [`_on_missing`](#records-selected-by-a-unique-field) below):
+By default, a record that cannot be found (unknown XML ID, or no row matching
+the unique field) raises an error, which rolls back the whole configuration.
+Set `_on_missing = warning` in a `record:` section to log a warning and carry
+on instead:
 
 ```ini
 [record:my_module.optional_record]
 _on_missing = warning
 name = Maybe Here
-```
 
-### Records Selected by a Unique Field
-
-Select a **specific record** by a unique column (e.g. a technical name) when
-it has no XML ID. The section is `[field:model:column=value]`:
-
-```ini
-[field:res.partner:tech_name=my_partner]
+[record:res.partner:tech_name=my_partner]
+_on_missing = warning
 name = My Partner
 ```
 
-The column should match **exactly one** row. More than one match always
-raises an error. When no row matches, `_on_missing` decides what happens:
-
-| `_on_missing`       | Behaviour                                             |
-|---------------------|-------------------------------------------------------|
-| `error` *(default)* | log an error and carry on with the next section       |
-| `warning`           | log a warning and carry on                            |
-| `fail`              | raise an error and roll back the whole configuration  |
-
-```ini
-[field:res.partner:tech_name=my_partner]
-_on_missing = fail
-name = My Partner
-```
-
-`_table` is supported as for `record:`.
+| `_on_missing` | Behaviour                                                      |
+|---------------|----------------------------------------------------------------|
+| `fail`        | raise an error and roll back the whole configuration (default) |
+| `warning`     | log a warning and carry on with the next section               |
 
 **Failures are all-or-nothing:** the whole configuration runs in a single
 transaction, so any raised error rolls back every section, including those

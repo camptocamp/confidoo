@@ -307,7 +307,7 @@ class Confidoo:
         """Apply the _on_missing policy when a targeted record does not exist.
 
         Args:
-            on_missing: "fail" (raise), "error" or "warning" (log and go on)
+            on_missing: "fail" (raise) or "warning" (log a warning and go on)
             error: Exception describing the missing record
 
         Raises:
@@ -315,8 +315,7 @@ class Confidoo:
         """
         if on_missing == "fail":
             raise error
-        level = logging.ERROR if on_missing == "error" else logging.WARNING
-        logger.log(level, "%s", error)
+        logger.warning("%s", error)
 
     def _apply_record_operation(self, operation: RecordOperation) -> None:
         """Apply settings to a specific record by XMLID.
@@ -366,7 +365,7 @@ class Confidoo:
                 transaction is rolled back, so nothing is changed)
 
         Example:
-            [field:res.partner:tech_name=my_partner]
+            [record:res.partner:tech_name=my_partner]
             name = My Partner
             -> UPDATE res_partner SET name = 'My Partner'
                WHERE tech_name = 'my_partner'

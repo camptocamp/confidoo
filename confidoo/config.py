@@ -21,11 +21,10 @@ if TYPE_CHECKING:
 
 
 # Section pattern: [type:identifier]
-SECTION_PATTERN = re.compile(
-    r"^(?P<type>model|record|field|config):(?P<identifier>.+)$"
-)
+SECTION_PATTERN = re.compile(r"^(?P<type>model|record|config):(?P<identifier>.+)$")
 
-# Identifier of a field section: model:column=value
+# Identifier of a record section selecting by field: model:column=value
+# (an XMLID contains neither ':' nor '=', so the two forms are distinct)
 FIELD_IDENTIFIER_PATTERN = re.compile(
     r"^(?P<model>[^:=\s]+):(?P<column>[^:=\s]+)=(?P<value>.+)$"
 )
@@ -33,13 +32,13 @@ FIELD_IDENTIFIER_PATTERN = re.compile(
 # Reserved field name for custom table specification
 RESERVED_TABLE_FIELD = "_table"
 
-# Reserved field name for the behaviour of field sections when no row matches
+# Reserved field name for the behaviour of record sections when the record is missing
 RESERVED_ON_MISSING_FIELD = "_on_missing"
 
-# Allowed _on_missing values: fail (raise, roll back everything), error (log an
-# error and go on), warning (log a warning and go on).
-# Supported by record sections (default: fail) and field sections (default: error)
-ON_MISSING_CHOICES = ("fail", "error", "warning")
+# Allowed _on_missing values: fail (raise, roll back everything; the default) or
+# warning (log a warning and go on)
+ON_MISSING_CHOICES = ("fail", "warning")
+DEFAULT_ON_MISSING = "fail"
 
 
 class OperationType(str, Enum):
@@ -47,7 +46,6 @@ class OperationType(str, Enum):
 
     MODEL = "model"
     RECORD = "record"
-    FIELD = "field"
     CONFIG = "config"
 
 
@@ -95,7 +93,7 @@ class RecordOperation(ConfigOperation):
     operation_type: ClassVar[OperationType] = OperationType.RECORD
 
     # What to do when the XMLID cannot be resolved: see ON_MISSING_CHOICES
-    on_missing: str = "fail"
+    on_missing: str = DEFAULT_ON_MISSING
 
 
 @dataclass(slots=True, frozen=True)
@@ -103,14 +101,14 @@ class FieldOperation(ConfigOperation):
     """Record configuration operation selecting the record by a unique field.
 
     The identifier is ``model:column=value``, e.g.
-    [field:res.partner:tech_name=my_partner] updates the record(s) of
+    [record:res.partner:tech_name=my_partner] updates the record of
     ``res.partner`` whose ``tech_name`` column equals ``my_partner``.
     """
 
-    operation_type: ClassVar[OperationType] = OperationType.FIELD
+    operation_type: ClassVar[OperationType] = OperationType.RECORD
 
     # What to do when no record matches: see ON_MISSING_CHOICES
-    on_missing: str = "error"
+    on_missing: str = DEFAULT_ON_MISSING
 
     def __post_init__(self) -> None:
         """Validate operation data, including the identifier format."""
@@ -118,7 +116,7 @@ class FieldOperation(ConfigOperation):
         if not FIELD_IDENTIFIER_PATTERN.match(self.identifier):
             msg = (
                 f"Invalid field identifier: {self.identifier!r}. "
-                f"Expected format: [field:model:column=value]"
+                f"Expected format: [record:model:column=value]"
             )
             raise InvalidSectionError(msg)
 
@@ -153,10 +151,11 @@ class ConfigParamOperation(ConfigOperation):
     operation_type: ClassVar[OperationType] = OperationType.CONFIG
 
 
-# Operation class for each section type
+# Operation class for each section type (FieldOperation is a record section too,
+# picked by the parser from the identifier format)
 OPERATION_CLASSES: dict[OperationType, type[ConfigOperation]] = {
     cls.operation_type: cls
-    for cls in (ModelOperation, RecordOperation, FieldOperation, ConfigParamOperation)
+    for cls in (ModelOperation, RecordOperation, ConfigParamOperation)
 }
 
 
@@ -189,7 +188,7 @@ class ConfidooConfigParser:
     Parses INI files with special section syntax:
     - [model:model_name] - Model-wide settings
     - [record:xml_id] - Record-specific settings
-    - [field:model:column=value] - Record selected by a unique field
+    - [record:model:column=value] - Record selected by a unique field
     - [config:set_param] - System parameter settings
 
     Preserves section order as they appear in the file.
@@ -274,7 +273,7 @@ class ConfidooConfigParser:
             msg = (
                 f"Invalid section name: {section_name!r}. "
                 f"Expected format: [type:identifier] where type is one of: "
-                f"model, record, field, config"
+                f"model, record, config"
             )
             raise InvalidSectionError(msg)
 
@@ -293,9 +292,9 @@ class ConfidooConfigParser:
             raise InvalidSectionError(msg)
 
         operation_class = OPERATION_CLASSES[operation_type]
-        if operation_type in (OperationType.RECORD, OperationType.FIELD):
-            default = "fail" if operation_type == OperationType.RECORD else "error"
-            on_missing = fields.pop(RESERVED_ON_MISSING_FIELD, None) or default
+        if operation_type == OperationType.RECORD:
+            on_missing = fields.pop(RESERVED_ON_MISSING_FIELD, None)
+            on_missing = on_missing or DEFAULT_ON_MISSING
             if on_missing not in ON_MISSING_CHOICES:
                 msg = (
                     f"Invalid {RESERVED_ON_MISSING_FIELD} value {on_missing!r} in "
@@ -303,12 +302,17 @@ class ConfidooConfigParser:
                     f"Expected one of: {', '.join(ON_MISSING_CHOICES)}"
                 )
                 raise InvalidSectionError(msg)
-            missing_class = (
-                RecordOperation
-                if operation_type == OperationType.RECORD
-                else FieldOperation
-            )
-            return missing_class(
+            if FIELD_IDENTIFIER_PATTERN.match(identifier):
+                record_class: type[RecordOperation | FieldOperation] = FieldOperation
+            elif ":" in identifier or "=" in identifier:
+                msg = (
+                    f"Invalid record identifier: {identifier!r}. Expected an XMLID "
+                    f"or model:column=value in section {section_name!r}"
+                )
+                raise InvalidSectionError(msg)
+            else:
+                record_class = RecordOperation
+            return record_class(
                 identifier=identifier,
                 fields=fields,
                 table=table,
@@ -316,8 +320,8 @@ class ConfidooConfigParser:
             )
         if RESERVED_ON_MISSING_FIELD in fields:
             msg = (
-                f"{RESERVED_ON_MISSING_FIELD} is only supported in record and "
-                f"field sections: {section_name!r}"
+                f"{RESERVED_ON_MISSING_FIELD} is only supported in record sections: "
+                f"{section_name!r}"
             )
             raise InvalidSectionError(msg)
         return operation_class(identifier=identifier, fields=fields, table=table)
