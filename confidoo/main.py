@@ -18,11 +18,17 @@ from psycopg2 import sql
 from .config import (
     ConfigOperation,
     ConfigParamOperation,
+    FieldOperation,
     ModelOperation,
     RecordOperation,
     parse_config,
 )
 from .db import ConnectionParams, OdooDatabase
+from .exceptions import (
+    AmbiguousRecordError,
+    RecordNotFoundError,
+    XmlIdNotFoundError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -239,6 +245,8 @@ class Confidoo:
             self._apply_model_operation(operation)
         elif isinstance(operation, RecordOperation):
             self._apply_record_operation(operation)
+        elif isinstance(operation, FieldOperation):
+            self._apply_field_operation(operation)
         elif isinstance(operation, ConfigParamOperation):
             self._apply_config_param_operation(operation)
         else:
@@ -246,9 +254,12 @@ class Confidoo:
             raise ValueError(msg)
 
     def _update(
-        self, table: str, fields: Mapping[str, str | None], res_id: int | None = None
+        self,
+        table: str,
+        fields: Mapping[str, str | None],
+        where: tuple[str, object] | None = None,
     ) -> int:
-        """Run an UPDATE on a table, optionally restricted to a single record.
+        """Run an UPDATE on a table, optionally restricted by a column value.
 
         Field names are quoted with sql.Identifier, and values are passed as
         query parameters (None for empty values).
@@ -256,7 +267,7 @@ class Confidoo:
         Args:
             table: Table to update
             fields: Mapping of field names to values
-            res_id: Optional record id to restrict the update to
+            where: Optional (column, value) pair to restrict the update to
 
         Returns:
             Number of rows affected
@@ -266,9 +277,10 @@ class Confidoo:
         )
         query = sql.SQL("UPDATE {} SET {}").format(sql.Identifier(table), set_clause)
         values = tuple(fields.values())
-        if res_id is not None:
-            query += sql.SQL(" WHERE id = %s")
-            values += (res_id,)
+        if where is not None:
+            column, value = where
+            query += sql.SQL(" WHERE {} = %s").format(sql.Identifier(column))
+            values += (value,)
         self.db.cr.execute(query, values)
         return self.db.cr.rowcount
 
@@ -290,11 +302,29 @@ class Confidoo:
         rowcount = self._update(table, operation.fields)
         logger.info("✓ Updated %d row(s)", rowcount)
 
+    @staticmethod
+    def _handle_missing(on_missing: str, error: Exception) -> None:
+        """Apply the _on_missing policy when a targeted record does not exist.
+
+        Args:
+            on_missing: "fail" (raise) or "warning" (log a warning and go on)
+            error: Exception describing the missing record
+
+        Raises:
+            Exception: The given error, if on_missing is "fail"
+        """
+        if on_missing == "fail":
+            raise error
+        logger.warning("%s", error)
+
     def _apply_record_operation(self, operation: RecordOperation) -> None:
         """Apply settings to a specific record by XMLID.
 
         Args:
             operation: Record operation to apply
+
+        Raises:
+            XmlIdNotFoundError: If the XMLID is unknown and on_missing is "fail"
 
         Example:
             [record:base.user_admin]
@@ -305,10 +335,14 @@ class Confidoo:
             return  # Nothing to update
 
         # Resolve table name from the XMLID model, not the operation identifier
-        model, res_id = self.db.resolve_xmlid(operation.identifier)
+        try:
+            model, res_id = self.db.resolve_xmlid(operation.identifier)
+        except XmlIdNotFoundError as exc:
+            self._handle_missing(operation.on_missing, exc)
+            return
         table = operation.table or self.db.resolve_table_name(model)
 
-        if not self._update(table, operation.fields, res_id):
+        if not self._update(table, operation.fields, ("id", res_id)):
             logger.warning(
                 "XMLID %s resolved to %s,%s but no row was found in table %s",
                 operation.identifier,
@@ -317,6 +351,45 @@ class Confidoo:
                 table,
             )
             return
+        logger.info("✓ Updated")
+
+    def _apply_field_operation(self, operation: FieldOperation) -> None:
+        """Apply settings to the record selected by a unique field.
+
+        Args:
+            operation: Field operation to apply
+
+        Raises:
+            RecordNotFoundError: If no record matches and on_missing is "fail"
+            AmbiguousRecordError: If more than one record matches (the
+                transaction is rolled back, so nothing is changed)
+
+        Example:
+            [record:res.partner:tech_name=my_partner]
+            name = My Partner
+            -> UPDATE res_partner SET name = 'My Partner'
+               WHERE tech_name = 'my_partner'
+        """
+        if not operation.fields:
+            return  # Nothing to update
+
+        table = operation.table or self.db.resolve_table_name(operation.model)
+        rowcount = self._update(
+            table, operation.fields, (operation.column, operation.value)
+        )
+        if rowcount == 0:
+            msg = (
+                f"No record found in {table} where "
+                f"{operation.column} = {operation.value!r}"
+            )
+            self._handle_missing(operation.on_missing, RecordNotFoundError(msg))
+            return
+        if rowcount > 1:
+            msg = (
+                f"{operation.column} = {operation.value!r} matched {rowcount} "
+                f"records in {table}, expected exactly one"
+            )
+            raise AmbiguousRecordError(msg)
         logger.info("✓ Updated")
 
     def _apply_config_param_operation(self, operation: ConfigParamOperation) -> None:
