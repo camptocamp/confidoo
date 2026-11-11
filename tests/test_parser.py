@@ -411,6 +411,35 @@ class TestErrorHandling:
         with pytest.raises(ConfigParseError, match="Failed to parse INI content"):
             parse_config(config_text)
 
+    def test_default_section_keys(self):
+        """Test [DEFAULT] keys are rejected instead of merged into every section."""
+        config_text = textwrap.dedent(
+            """
+            [DEFAULT]
+            foo = bar
+
+            [model:ir.cron]
+            active = False
+        """
+        )
+        with pytest.raises(
+            ConfigParseError, match=r"\[DEFAULT\] sections aren't supported.*foo"
+        ):
+            parse_config(config_text)
+
+    def test_empty_default_section(self):
+        """Test an empty [DEFAULT] section is harmless."""
+        config = parse_config("[DEFAULT]\n\n[model:ir.cron]\nactive = False\n")
+        assert config.operations[0].fields == {"active": "False"}
+
+    def test_default_section_keys_not_kept_on_reuse(self):
+        """Test [DEFAULT] keys of a failed parse don't leak into the next one."""
+        parser = ConfidooConfigParser()
+        with pytest.raises(ConfigParseError):
+            parser.parse("[DEFAULT]\nfoo = bar\n")
+        config = parser.parse("[model:ir.cron]\nactive = False\n")
+        assert config.operations[0].fields == {"active": "False"}
+
     def test_unknown_section_type(self):
         """Test error on unknown section type."""
         config_text = textwrap.dedent(

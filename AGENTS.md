@@ -63,6 +63,8 @@ Main parser class that processes INI files with special section syntax.
 - Preserves insertion order of sections (critical for correct application sequence)
 - Supports variable interpolation disabled for literal values
 - Allows empty values for unsetting parameters
+- Rejects `[DEFAULT]` keys (ConfigParser would merge them into every section) with
+  `ConfigParseError`
 
 #### `ParsedConfig`
 Container for parsed configuration operations.
