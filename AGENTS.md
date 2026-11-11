@@ -4,7 +4,7 @@ This document describes the architecture and components of Confidoo, a declarati
 
 ## Overview
 
-Confidoo is a command-line tool that applies declarative configuration to Odoo databases. It parses INI-formatted configuration files and applies model-wide settings, record-specific settings, and system parameters to target Odoo databases.
+Confidoo is a command-line tool that applies declarative configuration to Odoo databases. It parses INI-formatted configuration files and applies model-wide settings, record-specific settings, system parameters and raw SQL queries to target Odoo databases.
 
 ## Core Components
 
@@ -73,7 +73,23 @@ Container for parsed configuration operations.
 
 #### Operation Types
 
-All operations inherit from `ConfigOperation` base class:
+All operations inherit from `ConfigOperation` base class (`identifier`, `fields`).
+
+Operation-specific settings live on the operation classes, not as module constants:
+- `operation_type` (ClassVar): the section type
+- `attributes` (ClassVar): the special `_`-prefixed section attributes the operation
+  supports, mapped to the dataclass field they set (e.g. `{"_table": "table"}`). The
+  parser handles them generically: only the section's own operation attributes are
+  special, and any other key (even starting with `_`, like `_table` in a config
+  section) is a regular field
+- `required_attributes` (ClassVar): the special attributes that must be set (e.g.
+  `_query`). The parser reports missing ones
+- Operation-specific validation goes in the `_validate()` hook, called by
+  `ConfigOperation.__post_init__` (no subclass overrides `__post_init__`, since
+  zero-argument `super()` doesn't work in slots dataclasses before Python 3.14)
+
+`ModelOperation` and `RecordOperation` share the `TableOperation` base, which adds the
+`table` field and the `_table` attribute.
 
 ##### `ModelOperation`
 Represents model-wide settings that apply to all records of a model.
@@ -105,8 +121,30 @@ Represents system parameter configuration.
 - `fields`: Dictionary of parameter keys to values
 
 **Special Features:**
-- Config operations cannot have `_table` attribute
+- Config operations have no special attributes: `_table` is a regular parameter
 - Empty values (e.g., `param =`) are used to unset parameters
+
+##### `SqlOperation`
+Represents a raw SQL query, for changes the other operation types can't express.
+
+**Format**: `[sql:identifier]`
+
+**Attributes:**
+- `identifier`: Any label, unique within the file (e.g., "set-endpoint-apikey")
+- `query`: The raw SQL query (via the required `_query` attribute)
+- `fields`: Named query parameters, referenced in the query as `%(name)s`
+
+**Special Features:**
+- `_query` is a special attribute of SQL operations only (a regular field elsewhere)
+- `_query` is required. Validated on creation (`SqlOperation._validate()`, scanning
+  each `%` once with the `percent_pattern` ClassVar): every placeholder must be named,
+  unquoted (psycopg2 quotes values itself) and defined, every parameter must be used,
+  and literal `%` must be `%%`
+- Empty values (e.g., `param =`) are passed as `NULL`
+- The query is passed to psycopg2 unchanged, so placeholders and `%%` escaping follow
+  psycopg2's documented rules. Auto-escaping `%` or a custom placeholder syntax were
+  considered and rejected: both add a translation layer that diverges from psycopg2,
+  while the parse-time check already turns a missing `%%` into a clear error
 
 ### 3. Main Application Logic ([main.py](confidoo/main.py))
 
@@ -184,6 +222,9 @@ Confidoo(
 - **`_apply_config_param_operation(operation)`**: For each parameter:
   - Empty value: `DELETE FROM ir_config_parameter WHERE key = %s`
   - Non-empty: `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL UPSERT)
+- **`_apply_sql_operation(operation)`**: Executes the raw query with `fields` as named
+  parameters (always passed as a dict, so `%%` escaping is consistent) and logs psycopg2's
+  rowcount when available (rows affected or returned by the last statement)
 
 ### 4. Database Connection ([db.py](confidoo/db.py))
 
@@ -293,6 +334,7 @@ The complete flow from configuration file to database commit:
 │    • ModelOperation     │
 │    • RecordOperation    │
 │    • ConfigParamOperation│
+│    • SqlOperation       │
 └────────┬────────────────┘
          │
          ▼
@@ -332,6 +374,9 @@ The complete flow from configuration file to database commit:
 │    For each param:      │
 │    - UPSERT or DELETE   │
 │      ir_config_parameter│
+│                         │
+│  SqlOperation →         │
+│    execute(query, args) │
 └────────┬────────────────┘
          │
          ▼
@@ -353,11 +398,16 @@ Where `type` is one of:
 - `model` - Model-wide settings
 - `record` - Record-specific settings
 - `config` - System parameters
+- `sql` - Raw SQL query
 
 ### Special Attributes
 
+Special attributes are only recognized in the section types that support them. Any
+other key, even starting with `_`, is a regular field or parameter.
+
 - **`_table`**: Specifies custom database table name (for model and record sections only)
   - If not specified, table name is inferred by replacing `.` with `_` in the model name
+- **`_query`**: The raw SQL query (required, sql sections only)
 
 ### Field Values
 
@@ -422,6 +472,8 @@ def _apply_operation(self, operation: ConfigOperation) -> None:
         self._apply_record_operation(operation)
     elif isinstance(operation, ConfigParamOperation):
         self._apply_config_param_operation(operation)
+    elif isinstance(operation, SqlOperation):
+        self._apply_sql_operation(operation)
 ```
 
 **Benefits:**
@@ -451,19 +503,20 @@ rows_affected = self.db.cr.rowcount
 To add a new operation type:
 
 1. Add enum value to `OperationType`
-2. Create new operation class inheriting from `ConfigOperation`
-3. Update section pattern regex if needed
-4. Add parsing logic in `ConfidooConfigParser._parse_section()`
-5. Add handler method in `Confidoo` class (e.g., `_apply_new_operation()`)
-6. Update `_apply_operation()` dispatcher with isinstance check
+2. Create new operation class inheriting from `ConfigOperation` (set `operation_type`,
+   plus `attributes` and `_validate()` if needed), and add it to `OPERATION_CLASSES`.
+   The section pattern and its error message are built from `OperationType`
+3. Add handler method in `Confidoo` class (e.g., `_apply_new_operation()`)
+4. Update `_apply_operation()` dispatcher with isinstance check
 
 ### Custom Field Processing
 
 Field extraction logic is centralized in `ConfidooConfigParser._extract_fields()`. To add custom field processing:
 
-1. Check for special field names (like `_table`)
-2. Apply custom validation or transformation
-3. Store in appropriate attribute (fields dict or separate attribute)
+1. Declare special attributes (like `_table`) in the operation's `attributes` ClassVar,
+   mapped to a dataclass field: the parser extracts and passes them automatically.
+   List the mandatory ones in `required_attributes`
+2. Validate them in the operation's `_validate()`
 
 ## Testing
 
@@ -479,7 +532,7 @@ uv run pytest
 
 ### Completed Features
 
-✓ **Database Application Logic**: Fully implemented in `Confidoo` class with handlers for all three operation types
+✓ **Database Application Logic**: Fully implemented in `Confidoo` class with handlers for all four operation types
 ✓ **Transaction Management**: Automatic commit/rollback via `OdooDatabase` context manager
 ✓ **Row Count Reporting**: Operations report number of rows affected
 
