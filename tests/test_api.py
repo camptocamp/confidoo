@@ -19,6 +19,21 @@ from confidoo.main import Confidoo
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+def _get_partner_admin(cursor):
+    """Return the base.partner_admin partner's name, email and comment."""
+    cursor.execute(
+        """
+        SELECT p.name, p.email, p.comment
+        FROM res_partner p
+        JOIN ir_model_data imd ON imd.res_id = p.id
+        WHERE imd.module = 'base'
+        AND imd.name = 'partner_admin'
+        AND imd.model = 'res.partner'
+        """
+    )
+    return cursor.fetchone()
+
+
 def test_apply_with_config_content(odoo_db):
     """Test applying configuration using config_content parameter."""
     config_file = FIXTURES_DIR / "test-config-01.ini"
@@ -32,17 +47,7 @@ def test_apply_with_config_content(odoo_db):
     )
 
     # 1. Verify base.partner_admin was updated
-    cursor.execute(
-        """
-        SELECT p.name, p.email
-        FROM res_partner p
-        JOIN ir_model_data imd ON imd.res_id = p.id
-        WHERE imd.module = 'base'
-        AND imd.name = 'partner_admin'
-        AND imd.model = 'res.partner'
-        """
-    )
-    partner_data = cursor.fetchone()
+    partner_data = _get_partner_admin(cursor)
     assert partner_data is not None, "base.partner_admin record not found"
     assert partner_data["name"] == '"Confidoo"'
     assert partner_data["email"] == '"admin@confidoo.com"'
@@ -95,17 +100,7 @@ def test_apply_with_config_file(odoo_db):
     )
 
     # Verify base.partner_admin was updated
-    cursor.execute(
-        """
-        SELECT p.name, p.email
-        FROM res_partner p
-        JOIN ir_model_data imd ON imd.res_id = p.id
-        WHERE imd.module = 'base'
-        AND imd.name = 'partner_admin'
-        AND imd.model = 'res.partner'
-        """
-    )
-    partner_data = cursor.fetchone()
+    partner_data = _get_partner_admin(cursor)
     assert partner_data is not None, "base.partner_admin record not found"
     assert partner_data["name"] == '"Confidoo"'
     assert partner_data["email"] == '"admin@confidoo.com"'
@@ -340,3 +335,71 @@ def test_toggle_cron_active_by_xmlid(odoo_db, config_name, active):
 
     cursor.execute(query)
     assert cursor.fetchone()["active"] is active
+
+
+def test_apply_sql(odoo_db, caplog):
+    """Test applying a raw SQL section with named parameters."""
+    cursor, db_params = odoo_db
+    # '%%' is a literal '%' (psycopg2 escaping): runs as NOT LIKE '%@example.org'
+    config_content = dedent(
+        """
+        [sql:set-partner-admin-email]
+        _query = UPDATE res_partner
+            SET email = %(email)s, comment = %(comment)s
+            WHERE id = (
+                SELECT res_id FROM ir_model_data
+                WHERE module = %(module)s AND name = 'partner_admin'
+            )
+            AND email NOT LIKE '%%@example.org'
+        email = sql@confidoo.com
+        comment =
+        module = base
+        """
+    )
+    cursor.execute(
+        "UPDATE res_partner SET email = 'admin@example.com', comment = 'x'"
+        " WHERE id = (SELECT res_id FROM ir_model_data"
+        " WHERE module = 'base' AND name = 'partner_admin')"
+    )
+
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(**db_params, config_content=config_content)
+
+    partner = _get_partner_admin(cursor)
+    assert partner["email"] == "sql@confidoo.com"
+    assert partner["comment"] is None
+    assert any(r.getMessage() == "✓ Executed (1 row(s))" for r in caplog.records)
+
+
+def test_apply_sql_error_rolls_back(odoo_db):
+    """Test that an invalid SQL query rolls back the whole configuration."""
+    cursor, db_params = odoo_db
+    cursor.connection.rollback()
+    original_name = _get_partner_admin(cursor)["name"]
+    config_content = dedent(
+        """
+        [record:base.partner_admin]
+        name = Rolled Back
+
+        [sql:broken]
+        _query = UPDATE nonexistent_table SET foo = 'bar'
+        """
+    )
+
+    with pytest.raises(errors.lookup(errorcodes.UNDEFINED_TABLE)):
+        Confidoo.apply_config(**db_params, config_content=config_content)
+
+    assert _get_partner_admin(cursor)["name"] == original_name
+
+
+def test_apply_sql_without_rowcount(odoo_db, caplog):
+    """Test a statement without a row count (e.g. SET) is logged as executed."""
+    __, db_params = odoo_db
+
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(
+            **db_params,
+            config_content="[sql:timeout]\n_query = SET LOCAL statement_timeout = 0\n",
+        )
+
+    assert any(r.getMessage() == "✓ Executed" for r in caplog.records)

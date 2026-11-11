@@ -85,7 +85,7 @@ echo $CONFIDOO_CONFIG | confidoo apply
 
 ## Configuration Format
 
-Configuration files use INI format with three section types:
+Configuration files use INI format with four section types:
 
 ### Model-wide Settings
 
@@ -145,6 +145,82 @@ database.expiration_reason =
 database.expiration_date =
 ```
 
+### Raw SQL
+
+When the other section types aren't enough (e.g. the records to update depend on a
+related record), run a raw SQL query:
+
+```ini
+[sql:set-endpoint-apikey]
+_query = UPDATE endpoint_endpoint
+    SET value = %(value)s
+    WHERE name = 'apikey'
+      AND backend_id = (
+        SELECT id FROM endpoint_backend WHERE tech_name = %(backend)s
+      )
+value = my-secret-key
+backend = foo
+```
+
+- The identifier after `sql:` is any label, unique within the file
+- `_query` holds the query. Indent the following lines to write it on multiple lines.
+  As it's an INI value, an indented line starting with `#` or `;` is dropped as a
+  comment (use SQL `--` comments instead), and an unindented line starts a new key
+- Every other key is a query parameter (see below)
+
+Like every other section, the query runs in the same transaction, in the order it
+appears in the file: if any section fails, nothing is applied. Don't use transaction
+control statements (`COMMIT`, `ROLLBACK`, `BEGIN`, `SAVEPOINT`...) in the query: they
+would break this guarantee, e.g. changes committed before a later section fails can't
+be rolled back.
+
+The log reports the number of rows affected (or returned) by the query, as given by
+psycopg2. For a query with several statements, it's the count of the last one.
+
+#### Query parameters
+
+Parameters use the named placeholder syntax of
+[psycopg2](https://www.psycopg.org/docs/usage.html#passing-parameters-to-sql-queries),
+the PostgreSQL driver Confidoo is built on: a key `name = value` is referenced in the
+query as `%(name)s`.
+
+- Values are quoted and escaped by psycopg2, so they can't break the query or inject
+  SQL. Don't add quotes around placeholders: write `= %(name)s`, not `= '%(name)s'`
+  (a quoted placeholder is rejected)
+- The trailing `s` is part of the syntax, whatever the value's type
+- An empty value (`name =`) is passed as `NULL`. Values are stripped of leading and
+  trailing spaces, so for an empty string, convert it in the query:
+  `SET ref = COALESCE(%(ref)s, '')`
+- Every parameter must be used in the query, and every placeholder must be defined
+- Parameter names must be lowercase, as INI keys are case-insensitive (`Name` is read
+  as `name`)
+
+#### Literal `%` must be written `%%`
+
+Because `%` starts a placeholder, a literal `%` in the query must be doubled: psycopg2
+turns `%%` back into `%` before running it. This applies to every sql section, even one
+without parameters, and is the same rule as in any Python code using psycopg2.
+
+```ini
+[sql:disable-test-servers]
+_query = UPDATE ir_mail_server
+    SET active = false
+    WHERE smtp_host LIKE %(domain)s OR name LIKE 'Test%%'
+domain = %.example.com
+```
+
+Here the query runs as `... WHERE smtp_host LIKE '%.example.com' OR name LIKE 'Test%'`.
+Parameter values are not affected: `%` in a value (like `domain` above) is written as
+is.
+
+A single `%` (or a positional `%s`) is rejected when the configuration is parsed, before
+connecting to the database:
+
+```
+Invalid '%' in query of section: 'sql:disable-test-servers'.
+Use %(name)s for parameters, and %% for a literal '%'.
+```
+
 ## Complete Example
 
 ```ini
@@ -165,4 +241,15 @@ database.uuid = 0000-0000-0000-0000
 # Remove expiration settings
 database.expiration_reason =
 database.expiration_date =
+
+# Set the API key of a specific endpoint
+[sql:set-endpoint-apikey]
+_query = UPDATE endpoint_endpoint
+    SET value = %(value)s
+    WHERE name = 'apikey'
+      AND backend_id = (
+        SELECT id FROM endpoint_backend WHERE tech_name = %(backend)s
+      )
+value = my-secret-key
+backend = foo
 ```
