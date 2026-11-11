@@ -141,7 +141,11 @@ Represents a raw SQL query, for changes the other operation types can't express.
 - `_query` is required. Validated on creation (`SqlOperation._validate()`, scanning
   each `%` once with the `percent_pattern` ClassVar): every placeholder must be named,
   unquoted (psycopg2 quotes values itself) and defined, every parameter must be used,
-  and literal `%` must be `%%`
+  every `%(module.name)d` XML ID reference must be a full XML ID, and literal `%` must
+  be `%%`
+- `render_query(resolve_xmlid)` replaces the XML ID references with record ids (each
+  distinct XML ID resolved once), leaving parameter placeholders and `%%` to psycopg2.
+  The ids are inlined, as psycopg2 only supports `%s` placeholders
 - Empty values (e.g., `param =`) are passed as `NULL`
 - The query is passed to psycopg2 unchanged, so placeholders and `%%` escaping follow
   psycopg2's documented rules. Auto-escaping `%` or a custom placeholder syntax were
@@ -224,9 +228,10 @@ Confidoo(
 - **`_apply_config_param_operation(operation)`**: For each parameter:
   - Empty value: `DELETE FROM ir_config_parameter WHERE key = %s`
   - Non-empty: `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL UPSERT)
-- **`_apply_sql_operation(operation)`**: Executes the raw query with `fields` as named
-  parameters (always passed as a dict, so `%%` escaping is consistent) and logs psycopg2's
-  rowcount when available (rows affected or returned by the last statement)
+- **`_apply_sql_operation(operation)`**: Renders the query's XML ID references with
+  `db.resolve_xmlid()`, then executes it with `fields` as named parameters (always
+  passed as a dict, so `%%` escaping is consistent) and logs psycopg2's rowcount when
+  available (rows affected or returned by the last statement)
 
 ### 4. Database Connection ([db.py](confidoo/db.py))
 
@@ -270,6 +275,7 @@ Context manager for database connections with automatic transaction management.
 - **`resolve_xmlid(xmlid: str) -> tuple[str, int]`**:
   - Converts XML ID (e.g., "base.user_admin") to (model, res_id) tuple
   - Queries `ir_model_data` table
+  - Raises ValueError if not a full `module.name` XML ID (`split_xmlid()`)
   - Raises XmlIdNotFoundError if not found
 
 - **`resolve_table_name(model: str) -> str`**:
@@ -299,6 +305,12 @@ Custom exception classes for error handling:
 - **`TransactionError`**: Transaction operation failed
 
 ### 4. Utilities ([utils/](confidoo/utils/))
+
+#### XML IDs ([utils/xmlid.py](confidoo/utils/xmlid.py))
+
+**`split_xmlid(xmlid)`**: Splits a full XML ID into `(module, name)`, or raises
+`ValueError`. The single definition of a valid XML ID, shared by
+`OdooDatabase.resolve_xmlid()` and the parse-time check of `%(module.name)d` references.
 
 #### Exception Handler ([utils/errors.py](confidoo/utils/errors.py))
 

@@ -15,9 +15,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 from .exceptions import ConfigParseError, InvalidSectionError
+from .utils.xmlid import split_xmlid
 
 if TYPE_CHECKING:
-    from collections.abc import Container
+    from collections.abc import Callable, Container
     from typing import TextIO
 
 
@@ -120,6 +121,10 @@ class SqlOperation(ConfigOperation):
     The query is stored in the ``_query`` attribute, and every other key is
     a named query parameter, referenced in the query as ``%(name)s``.
 
+    Records can be referenced by XML ID as ``%(module.name)d``, like in Odoo
+    data files: it's replaced by the record's database id when applied (see
+    ``render_query``).
+
     The query is passed to psycopg2 as is, so psycopg2's parameter rules
     apply: as ``%`` starts a placeholder, a literal ``%`` must be written
     ``%%`` (e.g. ``LIKE 'foo%%'``).
@@ -131,12 +136,12 @@ class SqlOperation(ConfigOperation):
     attributes: ClassVar[dict[str, str]] = {"_query": "query"}
     required_attributes: ClassVar[frozenset[str]] = frozenset({"_query"})
 
-    # A '%' in the query: an escaped literal '%%', a %(name)s placeholder
-    # (invalid without the trailing 's', e.g. %(name)d), or (no group
-    # matched) an invalid bare '%'. Names have no whitespace, so an unclosed
-    # '%(' doesn't run on into the rest of the query
+    # A '%' in the query: an escaped literal '%%', a %(name)s parameter, a
+    # %(module.name)d XML ID reference (invalid with any other conversion),
+    # or (no group matched) an invalid bare '%'. Names have no whitespace, so
+    # an unclosed '%(' doesn't run on into the rest of the query
     percent_pattern: ClassVar[re.Pattern[str]] = re.compile(
-        r"%(?:(?P<escaped>%)|\((?P<name>[^)\s]*)\)(?P<conversion>s)?)?"
+        r"%(?:(?P<escaped>%)|\((?P<name>[^)\s]*)\)(?P<conversion>[sd])?)?"
     )
 
     query: str
@@ -144,8 +149,9 @@ class SqlOperation(ConfigOperation):
     def _validate(self) -> None:
         """Validate the query and its parameters.
 
-        Every placeholder must be named, unquoted and have a parameter, every
-        parameter must be used, and any literal ``%`` must be escaped as ``%%``.
+        Every parameter placeholder must be named, unquoted and have a
+        parameter, every parameter must be used, every XML ID reference must be
+        a full ``module.name``, and any literal ``%`` must be escaped as ``%%``.
 
         Raises:
             InvalidSectionError: If the query doesn't match its parameters
@@ -165,11 +171,23 @@ class SqlOperation(ConfigOperation):
             if match["conversion"] is None:
                 found = self.query[match.start() : match.end() + 1]
                 msg = (
-                    f"Invalid query parameter {found} in section: {section}. "
-                    f"Placeholders must end in 's' (%({name})s), whatever the "
-                    f"value's type."
+                    f"Invalid placeholder {found} in section: {section}. Use "
+                    f"%({name})s for a parameter (whatever the value's type), or "
+                    f"%(module.name)d for an XML ID."
                 )
                 raise InvalidSectionError(msg)
+            if match["conversion"] == "d":
+                try:
+                    split_xmlid(name)
+                except ValueError:
+                    msg = (
+                        f"Invalid XML ID reference {match[0]} in section: "
+                        f"{section}. Use a full XML ID: %(module.name)d."
+                    )
+                    if "." not in name:
+                        msg += f" For a parameter, use %({name})s."
+                    raise InvalidSectionError(msg) from None
+                continue
             if not name:
                 msg = f"Empty query parameter name %()s in section: {section}"
                 raise InvalidSectionError(msg)
@@ -201,6 +219,32 @@ class SqlOperation(ConfigOperation):
                 f"{section}. Reference them in the query as %(name)s."
             )
             raise InvalidSectionError(msg)
+
+    def render_query(self, resolve_xmlid: Callable[[str], int]) -> str:
+        """Return the query with its XML ID references replaced by record ids.
+
+        Parameter placeholders and escaped ``%%`` are left for psycopg2. The
+        ids are integers read from the database, so they're safely inlined
+        (psycopg2 only supports ``%s`` placeholders anyway).
+
+        Args:
+            resolve_xmlid: Function returning the record id of an XML ID.
+                Called once per distinct XML ID.
+
+        Returns:
+            Query ready to be executed with the parameters
+        """
+        ids: dict[str, int] = {}
+
+        def replace(match: re.Match[str]) -> str:
+            if match["conversion"] != "d":
+                return match[0]
+            xmlid = match["name"]
+            if xmlid not in ids:
+                ids[xmlid] = resolve_xmlid(xmlid)
+            return str(ids[xmlid])
+
+        return self.percent_pattern.sub(replace, self.query)
 
 
 # Operation class for each section type

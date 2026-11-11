@@ -36,6 +36,7 @@ from .exceptions import (
     NotOdooDatabaseError,
     XmlIdNotFoundError,
 )
+from .utils.xmlid import split_xmlid
 
 if TYPE_CHECKING:
     from psycopg2.extensions import connection as Connection
@@ -320,12 +321,7 @@ class OdooDatabase:
             >>> db.resolve_xmlid('base.user_admin')
             ('res.users', 2)
         """
-        # Parse module.name format
-        if "." not in xmlid:
-            msg = f"Invalid XMLID format: {xmlid}. Expected 'module.name'"
-            raise ValueError(msg)
-
-        module, name = xmlid.split(".", 1)
+        module, name = split_xmlid(xmlid)
 
         query = """
             SELECT model, res_id
