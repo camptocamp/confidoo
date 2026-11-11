@@ -245,15 +245,6 @@ class ConfidooConfigParser:
     Preserves section order as they appear in the file.
     """
 
-    def __init__(self) -> None:
-        """Initialize the parser."""
-        self._parser = ConfigParser(
-            # Disable variable interpolation
-            interpolation=None,
-            # Support empty values (e.g., param =)
-            allow_no_value=True,
-        )
-
     def parse(self, content: str) -> ParsedConfig:
         """Parse configuration from a string.
 
@@ -264,19 +255,32 @@ class ConfidooConfigParser:
             ParsedConfig object with ordered operations
 
         Raises:
-            ConfigParseError: If the content is invalid INI format
+            ConfigParseError: If the content is invalid INI format, or has
+                [DEFAULT] keys
             InvalidSectionError: If section syntax is invalid
         """
-        # Clear any previous state to allow parser reusability
-        self._parser.clear()
-
+        ini = ConfigParser(
+            # Disable variable interpolation
+            interpolation=None,
+            # Support empty values (e.g., param =)
+            allow_no_value=True,
+        )
         try:
-            self._parser.read_string(content)
+            ini.read_string(content)
         except Exception as e:
             msg = f"Failed to parse INI content: {e}"
             raise ConfigParseError(msg) from e
 
-        return self._build_config()
+        # ConfigParser merges [DEFAULT] keys into every section, where they
+        # would become fields, parameters or query parameters
+        if defaults := ini.defaults():
+            msg = (
+                f"[{ini.default_section}] sections aren't supported, "
+                f"found keys: {', '.join(defaults)}"
+            )
+            raise ConfigParseError(msg)
+
+        return self._build_config(ini)
 
     def parse_file(self, file: TextIO) -> ParsedConfig:
         """Parse configuration from a file object.
@@ -293,7 +297,7 @@ class ConfidooConfigParser:
         """
         return self.parse(file.read())
 
-    def _build_config(self) -> ParsedConfig:
+    def _build_config(self, ini: ConfigParser) -> ParsedConfig:
         """Build ParsedConfig from the internal ConfigParser.
 
         Operations are processed in the order they appear in the file.
@@ -301,16 +305,17 @@ class ConfidooConfigParser:
         """
         config = ParsedConfig()
 
-        for section_name in self._parser.sections():
-            operation = self._parse_section(section_name)
+        for section_name in ini.sections():
+            operation = self._parse_section(ini, section_name)
             config.add_operation(operation)
 
         return config
 
-    def _parse_section(self, section_name: str) -> ConfigOperation:
+    def _parse_section(self, ini: ConfigParser, section_name: str) -> ConfigOperation:
         """Parse a single section.
 
         Args:
+            ini: INI parser holding the section
             section_name: Raw section name from INI file
 
         Returns:
@@ -337,7 +342,9 @@ class ConfidooConfigParser:
 
         # Extract fields and the operation's special attributes
         operation_class = OPERATION_CLASSES[operation_type]
-        fields, attrs = self._extract_fields(section_name, operation_class.attributes)
+        fields, attrs = self._extract_fields(
+            ini, section_name, operation_class.attributes
+        )
 
         if missing := sorted(operation_class.required_attributes - attrs.keys()):
             msg = f"Missing {', '.join(missing)} attribute in section: {section_name!r}"
@@ -349,11 +356,12 @@ class ConfidooConfigParser:
         return operation_class(identifier=identifier, fields=fields, **kwargs)
 
     def _extract_fields(
-        self, section_name: str, attributes: Container[str]
+        self, ini: ConfigParser, section_name: str, attributes: Container[str]
     ) -> tuple[dict[str, str | None], dict[str, str]]:
         """Extract fields and special attributes from a section.
 
         Args:
+            ini: INI parser holding the section
             section_name: Section name to extract fields from
             attributes: Special attributes supported by the section's operation.
                 Any other key, even starting with ``_``, is a regular field
@@ -369,7 +377,7 @@ class ConfidooConfigParser:
         fields: dict[str, str | None] = {}
         attrs: dict[str, str] = {}
 
-        for key, raw_value in self._parser.items(section_name):
+        for key, raw_value in ini.items(section_name):
             # None or blank value means empty assignment (e.g., "field =")
             value = (raw_value or "").strip() or None
 
