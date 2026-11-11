@@ -278,11 +278,13 @@ class TestParseSqlSection:
             ("[sql:q]\n_query = SELECT 1\nfoo = 1\n", "Unused query parameter"),
             ("[sql:q]\n_query = SELECT %(Foo)s\nfoo = 1\n", "must be lowercase"),
             ("[sql:q]\n_query = SELECT %()s\n", "Empty query parameter name"),
-            (
-                "[sql:q]\n_query = SELECT %(n)d\nn = 1\n",
-                r"Invalid query parameter %\(n\)d .* must end in 's' \(%\(n\)s\)",
-            ),
-            ("[sql:q]\n_query = SELECT %(n)\nn = 1\n", r"%\(n\)s\)"),
+            ("[sql:q]\n_query = SELECT %(n)i\nn = 1\n", r"Invalid placeholder %\(n\)i"),
+            ("[sql:q]\n_query = SELECT %(n)\nn = 1\n", r"Use %\(n\)s for a parameter"),
+            ("[sql:q]\n_query = SELECT %(n)d\n", r"Invalid XML ID reference %\(n\)d"),
+            ("[sql:q]\n_query = SELECT %(n)d\n", r"For a parameter, use %\(n\)s\."),
+            ("[sql:q]\n_query = SELECT %(base.)d\n", r"XML ID: %\(module\.name\)d\.$"),
+            ("[sql:q]\n_query = SELECT %(.x)d\n", "Invalid XML ID reference"),
+            ("[sql:q]\n_query = SELECT %(base.x)d\nx = 1\n", "Unused query parameter"),
             ("[sql:q]\n_query = SELECT '%(x)s'\nx = 1\n", "Quoted query parameter"),
             ("[sql:q]\n_query = SELECT '%(x)s\nx = 1\n", "Quoted query parameter"),
             ('[sql:q]\n_query = SELECT %(x)s"\nx = 1\n', "Quoted query parameter"),
@@ -302,6 +304,34 @@ class TestParseSqlSection:
         """Test invalid sql sections raise a descriptive error."""
         with pytest.raises(InvalidSectionError, match=match):
             parse_config(config_text)
+
+    def test_parse_sql_xmlid_references(self):
+        """Test XML ID references need no parameter, and are rendered as ids."""
+        config_text = textwrap.dedent(
+            """
+            [sql:xmlid]
+            _query = UPDATE res_partner SET name = %(name)s
+                WHERE id IN (%(base.main_partner)d, %(base.partner_admin)d)
+                AND parent_id = %(base.main_partner)d AND ref LIKE 'x%%'
+            name = Foo
+        """
+        )
+        operation = parse_config(config_text).operations[0]
+        assert isinstance(operation, SqlOperation)
+        assert operation.fields == {"name": "Foo"}
+
+        resolved = []
+
+        def resolve_xmlid(xmlid):
+            resolved.append(xmlid)
+            return {"base.main_partner": 1, "base.partner_admin": 3}[xmlid]
+
+        assert operation.render_query(resolve_xmlid) == (
+            "UPDATE res_partner SET name = %(name)s\n"
+            "WHERE id IN (1, 3)\n"
+            "AND parent_id = 1 AND ref LIKE 'x%%'"
+        )
+        assert resolved == ["base.main_partner", "base.partner_admin"]
 
     def test_parse_sql_undefined_lowercase_param_no_hint(self):
         """Test the lowercase hint is only given for names with uppercase."""

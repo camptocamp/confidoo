@@ -363,8 +363,9 @@ class Confidoo:
     def _apply_sql_operation(self, operation: SqlOperation) -> None:
         """Execute a raw SQL query.
 
-        The section keys (other than _query) are passed as named query
-        parameters, always as a dict (see SqlOperation for the query rules).
+        XML ID references are replaced by record ids, then the section keys
+        (other than _query) are passed as named query parameters, always as a
+        dict (see SqlOperation for the query rules).
 
         Args:
             operation: SQL operation to apply
@@ -372,11 +373,16 @@ class Confidoo:
         Example:
             [sql:set-endpoint-apikey]
             _query = UPDATE endpoint_endpoint SET value = %(value)s
-                WHERE name = 'apikey'
+                WHERE name = 'apikey' AND backend_id = %(my_module.backend)d
             value = secret
-            -> UPDATE endpoint_endpoint SET value = 'secret' WHERE name = 'apikey'
+            -> UPDATE endpoint_endpoint SET value = 'secret'
+               WHERE name = 'apikey' AND backend_id = 42
+
+        Raises:
+            XmlIdNotFoundError: If a referenced XML ID doesn't exist
         """
-        self.db.cr.execute(operation.query, operation.fields)
+        query = operation.render_query(lambda xmlid: self.db.resolve_xmlid(xmlid)[1])
+        self.db.cr.execute(query, operation.fields)
         # psycopg2's rowcount: rows affected or returned by the last statement,
         # or -1 if not applicable (e.g. DDL statements)
         rowcount = self.db.cr.rowcount

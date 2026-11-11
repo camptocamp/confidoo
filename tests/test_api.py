@@ -403,3 +403,33 @@ def test_apply_sql_without_rowcount(odoo_db, caplog):
         )
 
     assert any(r.getMessage() == "✓ Executed" for r in caplog.records)
+
+
+def test_apply_sql_xmlid_reference(odoo_db, caplog):
+    """Test XML ID references in a raw SQL query are resolved to record ids."""
+    cursor, db_params = odoo_db
+    config_content = dedent(
+        """
+        [sql:set-partner-admin-comment]
+        _query = UPDATE res_partner SET comment = %(comment)s
+            WHERE id = %(base.partner_admin)d
+        comment = set by xmlid
+        """
+    )
+
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(**db_params, config_content=config_content)
+
+    assert _get_partner_admin(cursor)["comment"] == "set by xmlid"
+    assert any(r.getMessage() == "✓ Executed (1 row(s))" for r in caplog.records)
+
+
+def test_apply_sql_unknown_xmlid(odoo_db):
+    """Test an unknown XML ID reference in a raw SQL query raises an error."""
+    __, db_params = odoo_db
+
+    with pytest.raises(XmlIdNotFoundError):
+        Confidoo.apply_config(
+            **db_params,
+            config_content="[sql:q]\n_query = SELECT %(confidoo_test.nope)d\n",
+        )

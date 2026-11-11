@@ -187,13 +187,35 @@ query as `%(name)s`.
 - Values are quoted and escaped by psycopg2, so they can't break the query or inject
   SQL. Don't add quotes around placeholders: write `= %(name)s`, not `= '%(name)s'`
   (a quoted placeholder is rejected)
-- The trailing `s` is part of the syntax, whatever the value's type
+- The trailing `s` is part of the syntax, whatever the value's type. As psycopg2's
+  documentation puts it: *"The variables placeholder must always be a `%s`, even if a
+  different placeholder (such as a `%d` for integers or `%f` for floats) may look more
+  appropriate."* In Confidoo, `%(...)d` is reserved for XML ID references
 - An empty value (`name =`) is passed as `NULL`. Values are stripped of leading and
   trailing spaces, so for an empty string, convert it in the query:
   `SET ref = COALESCE(%(ref)s, '')`
 - Every parameter must be used in the query, and every placeholder must be defined
 - Parameter names must be lowercase, as INI keys are case-insensitive (`Name` is read
   as `name`)
+
+#### XML ID references
+
+Like in Odoo data files, a record can be referenced by its XML ID as
+`%(module.name)d`. It's replaced by the record's database id when the section is
+applied, and needs no key in the section:
+
+```ini
+[sql:set-endpoint-apikey]
+_query = UPDATE endpoint_endpoint
+    SET value = %(value)s
+    WHERE name = 'apikey' AND backend_id = %(my_module.backend_foo)d
+value = my-secret-key
+```
+
+- The XML ID must be complete (`module.name`)
+- The trailing `d` sets it apart from parameters (`%(name)s`), and follows Odoo's
+  convention for XML IDs. It's not an integer placeholder: use `%(limit)s` for a number
+- An XML ID that doesn't exist fails the whole configuration
 
 #### Literal `%` must be written `%%`
 
