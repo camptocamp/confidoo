@@ -11,7 +11,9 @@ import pytest
 from psycopg2 import errorcodes, errors
 
 from confidoo.exceptions import (
+    AmbiguousRecordError,
     InvalidSectionError,
+    RecordNotFoundError,
     XmlIdNotFoundError,
 )
 from confidoo.main import Confidoo
@@ -282,6 +284,72 @@ def test_apply_stale_xmlid_warns(odoo_db, caplog):
     assert "res.partner,2147483647" in message
     assert "res_partner" in message
     assert not any(r.getMessage() == "✓ Updated" for r in caplog.records)
+
+
+def test_apply_field_operation(odoo_db):
+    """Test selecting a record by a unique field."""
+    cursor, db_params = odoo_db
+    cursor.execute("SELECT partner_id FROM res_users WHERE id = 2")
+    partner_id = cursor.fetchone()["partner_id"]
+    Confidoo.apply_config(
+        **db_params,
+        config_content=f"[record:res.partner:id={partner_id}]\nref = confidoo\n",
+    )
+    cursor.execute("SELECT ref FROM res_partner WHERE id = %s", (partner_id,))
+    assert cursor.fetchone()["ref"] == "confidoo"
+
+
+@pytest.mark.parametrize(
+    ("section", "missing"),
+    [
+        ("record:res.users:login=__nope__", "__nope__"),
+        ("record:confidoo_test.nope", "confidoo_test.nope"),
+    ],
+)
+def test_apply_record_missing_warning(odoo_db, caplog, section, missing):
+    """Test that _on_missing = warning logs and the next section still runs."""
+    __, db_params = odoo_db
+    with caplog.at_level(logging.INFO, logger="confidoo.main"):
+        Confidoo.apply_config(
+            **db_params,
+            config_content=(
+                f"[{section}]\n_on_missing = warning\nactive = True\n"
+                "[config:set_param]\nconfidoo.after = 1\n"
+            ),
+        )
+    problems = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(problems) == 1
+    assert problems[0].levelno == logging.WARNING
+    assert missing in problems[0].getMessage()
+    assert any("confidoo.after" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("section", "error"),
+    [
+        ("record:res.users:login=__nope__", RecordNotFoundError),
+        ("record:confidoo_test.nope", XmlIdNotFoundError),
+    ],
+)
+@pytest.mark.parametrize("option", ["", "_on_missing = fail\n"])
+def test_apply_record_missing_fails_by_default(odoo_db, section, error, option):
+    """Test that a missing record raises unless _on_missing = warning."""
+    __, db_params = odoo_db
+    with pytest.raises(error):
+        Confidoo.apply_config(
+            **db_params,
+            config_content=f"[{section}]\n{option}active = True\n",
+        )
+
+
+def test_apply_field_operation_ambiguous(odoo_db):
+    """Test that a non-unique match raises and rolls back."""
+    cursor, db_params = odoo_db
+    with pytest.raises(AmbiguousRecordError):
+        Confidoo.apply_config(
+            **db_params,
+            config_content="[record:res.partner:active=true]\ncomment = x\n",
+        )
 
 
 @pytest.mark.parametrize("config_content", ["", "\n", "   \n\t\n"])

@@ -95,6 +95,23 @@ Represents settings for a specific record identified by XML ID.
 - `fields`: Dictionary of field names to values
 - `table`: Optional custom database table name (via `_table` attribute)
 
+`RecordOperation` and `FieldOperation` accept `_on_missing` (`fail`, the default, or
+`warning`; stored as `on_missing`) for a record that cannot be found: unknown XMLID or
+no matching row. Handled by `Confidoo._handle_missing()`.
+
+##### `FieldOperation`
+Represents settings for a record selected by a unique column. It is a `record:` section
+whose identifier has the `model:column=value` form (an XMLID contains neither `:` nor `=`);
+the parser picks `FieldOperation` over `RecordOperation` from the identifier format.
+
+**Format**: `[record:model:column=value]`
+
+**Attributes:** `model`, `column`, `value` (parsed from `identifier`), `fields`, `table`, `on_missing`
+
+Applied as `UPDATE table SET fields WHERE column = value`. On 0 rows, `_on_missing`
+decides between a warning and raising `RecordNotFoundError`; more than 1 row always raises
+`AmbiguousRecordError`.
+
 ##### `ConfigParamOperation`
 Represents system parameter configuration.
 
@@ -252,6 +269,7 @@ Custom exception classes for error handling:
 - **`DatabaseConnectionError`**: Connection to database failed
 - **`NotOdooDatabaseError`**: Database validation failed (missing `ir_module_module` table)
 - **`OdooVersionError`**: Version detection failed (no longer raised; version detection is non-fatal. Kept for backwards compatibility)
+- **`RecordNotFoundError`** / **`AmbiguousRecordError`**: `record:model:column=value` selector matched 0 / more than 1 rows
 - **`XmlIdNotFoundError`**: XMLID resolution failed (record not found in `ir_model_data`)
 - **`TransactionError`**: Transaction operation failed
 
