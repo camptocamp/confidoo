@@ -15,16 +15,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 from .exceptions import ConfigParseError, InvalidSectionError
+from .utils.xmlid import split_xmlid
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Container
     from typing import TextIO
-
-
-# Section pattern: [type:identifier]
-SECTION_PATTERN = re.compile(r"^(?P<type>model|record|config):(?P<identifier>.+)$")
-
-# Reserved field name for custom table specification
-RESERVED_TABLE_FIELD = "_table"
 
 
 class OperationType(str, Enum):
@@ -33,6 +28,13 @@ class OperationType(str, Enum):
     MODEL = "model"
     RECORD = "record"
     CONFIG = "config"
+    SQL = "sql"
+
+
+# Section pattern: [type:identifier]
+SECTION_PATTERN = re.compile(
+    rf"^(?P<type>{'|'.join(t.value for t in OperationType)}):(?P<identifier>.+)$"
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -45,22 +47,45 @@ class ConfigOperation:
 
     operation_type: ClassVar[OperationType]
 
+    # Special section attributes this operation supports, mapped to the
+    # dataclass field they set. E.g. {"_table": "table"}
+    attributes: ClassVar[dict[str, str]] = {}
+
+    # Special section attributes that must be set
+    required_attributes: ClassVar[frozenset[str]] = frozenset()
+
     identifier: str
     fields: dict[str, str | None]
-    table: str | None = None
 
     def __post_init__(self) -> None:
         """Validate operation data."""
         if not self.identifier:  # pragma: no cover
             msg = f"Operation identifier cannot be empty for {self.operation_type}"
             raise ValueError(msg)
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate operation-specific data. Override in subclasses."""
 
     def __str__(self) -> str:
         return f"{self.operation_type.value}:{self.identifier}"
 
 
 @dataclass(slots=True, frozen=True)
-class ModelOperation(ConfigOperation):
+class TableOperation(ConfigOperation):
+    """Base class for operations that update a model's table.
+
+    The table name is inferred from the model name, unless set with the
+    ``_table`` attribute.
+    """
+
+    attributes: ClassVar[dict[str, str]] = {"_table": "table"}
+
+    table: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ModelOperation(TableOperation):
     """Model-wide configuration operation.
 
     Example: [model:ir.mail_server]
@@ -70,7 +95,7 @@ class ModelOperation(ConfigOperation):
 
 
 @dataclass(slots=True, frozen=True)
-class RecordOperation(ConfigOperation):
+class RecordOperation(TableOperation):
     """Record-specific configuration operation.
 
     Example: [record:customer_module.sftp_server]
@@ -89,10 +114,143 @@ class ConfigParamOperation(ConfigOperation):
     operation_type: ClassVar[OperationType] = OperationType.CONFIG
 
 
+@dataclass(slots=True, frozen=True)
+class SqlOperation(ConfigOperation):
+    """Raw SQL query operation.
+
+    The query is stored in the ``_query`` attribute, and every other key is
+    a named query parameter, referenced in the query as ``%(name)s``.
+
+    Records can be referenced by XML ID as ``%(module.name)d``, like in Odoo
+    data files: it's replaced by the record's database id when applied (see
+    ``render_query``).
+
+    The query is passed to psycopg2 as is, so psycopg2's parameter rules
+    apply: as ``%`` starts a placeholder, a literal ``%`` must be written
+    ``%%`` (e.g. ``LIKE 'foo%%'``).
+
+    Example: [sql:set-endpoint-apikey]
+    """
+
+    operation_type: ClassVar[OperationType] = OperationType.SQL
+    attributes: ClassVar[dict[str, str]] = {"_query": "query"}
+    required_attributes: ClassVar[frozenset[str]] = frozenset({"_query"})
+
+    # A '%' in the query: an escaped literal '%%', a %(name)s parameter, a
+    # %(module.name)d XML ID reference (invalid with any other conversion),
+    # or (no group matched) an invalid bare '%'. Names have no whitespace, so
+    # an unclosed '%(' doesn't run on into the rest of the query
+    percent_pattern: ClassVar[re.Pattern[str]] = re.compile(
+        r"%(?:(?P<escaped>%)|\((?P<name>[^)\s]*)\)(?P<conversion>[sd])?)?"
+    )
+
+    query: str
+
+    def _validate(self) -> None:
+        """Validate the query and its parameters.
+
+        Every parameter placeholder must be named, unquoted and have a
+        parameter, every parameter must be used, every XML ID reference must be
+        a full ``module.name``, and any literal ``%`` must be escaped as ``%%``.
+
+        Raises:
+            InvalidSectionError: If the query doesn't match its parameters
+        """
+        section = repr(str(self))
+        placeholders: set[str] = set()
+        for match in self.percent_pattern.finditer(self.query):
+            name = match["name"]
+            if match["escaped"]:
+                continue
+            if name is None:
+                msg = (
+                    f"Invalid '%' in query of section: {section}. "
+                    f"Use %(name)s for parameters, and %% for a literal '%'."
+                )
+                raise InvalidSectionError(msg)
+            if match["conversion"] is None:
+                found = self.query[match.start() : match.end() + 1]
+                msg = (
+                    f"Invalid placeholder {found} in section: {section}. Use "
+                    f"%({name})s for a parameter (whatever the value's type), or "
+                    f"%(module.name)d for an XML ID."
+                )
+                raise InvalidSectionError(msg)
+            if match["conversion"] == "d":
+                try:
+                    split_xmlid(name)
+                except ValueError:
+                    msg = (
+                        f"Invalid XML ID reference {match[0]} in section: "
+                        f"{section}. Use a full XML ID: %(module.name)d."
+                    )
+                    if "." not in name:
+                        msg += f" For a parameter, use %({name})s."
+                    raise InvalidSectionError(msg) from None
+                continue
+            if not name:
+                msg = f"Empty query parameter name %()s in section: {section}"
+                raise InvalidSectionError(msg)
+            # psycopg2 quotes values itself: a quoted placeholder ends up outside
+            # the string literal, e.g. '%(x)s' -> ''value''
+            before = self.query[match.start() - 1 : match.start()]
+            after = self.query[match.end() : match.end() + 1]
+            if before in ("'", '"') or after in ("'", '"'):
+                msg = (
+                    f"Quoted query parameter {match[0]} in section: {section}. "
+                    f"Remove the quotes: values are quoted automatically."
+                )
+                raise InvalidSectionError(msg)
+            placeholders.add(name)
+
+        if undefined := sorted(placeholders - self.fields.keys()):
+            msg = (
+                f"Undefined query parameter(s) {', '.join(undefined)} in section: "
+                f"{section}."
+            )
+            # INI keys are lowercased, so a name with uppercase can't be defined
+            if any(name != name.lower() for name in undefined):
+                msg += " Parameter names must be lowercase."
+            raise InvalidSectionError(msg)
+
+        if unused := sorted(self.fields.keys() - placeholders):
+            msg = (
+                f"Unused query parameter(s) {', '.join(unused)} in section: "
+                f"{section}. Reference them in the query as %(name)s."
+            )
+            raise InvalidSectionError(msg)
+
+    def render_query(self, resolve_xmlid: Callable[[str], int]) -> str:
+        """Return the query with its XML ID references replaced by record ids.
+
+        Parameter placeholders and escaped ``%%`` are left for psycopg2. The
+        ids are integers read from the database, so they're safely inlined
+        (psycopg2 only supports ``%s`` placeholders anyway).
+
+        Args:
+            resolve_xmlid: Function returning the record id of an XML ID.
+                Called once per distinct XML ID.
+
+        Returns:
+            Query ready to be executed with the parameters
+        """
+        ids: dict[str, int] = {}
+
+        def replace(match: re.Match[str]) -> str:
+            if match["conversion"] != "d":
+                return match[0]
+            xmlid = match["name"]
+            if xmlid not in ids:
+                ids[xmlid] = resolve_xmlid(xmlid)
+            return str(ids[xmlid])
+
+        return self.percent_pattern.sub(replace, self.query)
+
+
 # Operation class for each section type
 OPERATION_CLASSES: dict[OperationType, type[ConfigOperation]] = {
     cls.operation_type: cls
-    for cls in (ModelOperation, RecordOperation, ConfigParamOperation)
+    for cls in (ModelOperation, RecordOperation, ConfigParamOperation, SqlOperation)
 }
 
 
@@ -126,18 +284,10 @@ class ConfidooConfigParser:
     - [model:model_name] - Model-wide settings
     - [record:xml_id] - Record-specific settings
     - [config:set_param] - System parameter settings
+    - [sql:identifier] - Raw SQL query
 
     Preserves section order as they appear in the file.
     """
-
-    def __init__(self) -> None:
-        """Initialize the parser."""
-        self._parser = ConfigParser(
-            # Disable variable interpolation
-            interpolation=None,
-            # Support empty values (e.g., param =)
-            allow_no_value=True,
-        )
 
     def parse(self, content: str) -> ParsedConfig:
         """Parse configuration from a string.
@@ -149,19 +299,32 @@ class ConfidooConfigParser:
             ParsedConfig object with ordered operations
 
         Raises:
-            ConfigParseError: If the content is invalid INI format
+            ConfigParseError: If the content is invalid INI format, or has
+                [DEFAULT] keys
             InvalidSectionError: If section syntax is invalid
         """
-        # Clear any previous state to allow parser reusability
-        self._parser.clear()
-
+        ini = ConfigParser(
+            # Disable variable interpolation
+            interpolation=None,
+            # Support empty values (e.g., param =)
+            allow_no_value=True,
+        )
         try:
-            self._parser.read_string(content)
+            ini.read_string(content)
         except Exception as e:
             msg = f"Failed to parse INI content: {e}"
             raise ConfigParseError(msg) from e
 
-        return self._build_config()
+        # ConfigParser merges [DEFAULT] keys into every section, where they
+        # would become fields, parameters or query parameters
+        if defaults := ini.defaults():
+            msg = (
+                f"[{ini.default_section}] sections aren't supported, "
+                f"found keys: {', '.join(defaults)}"
+            )
+            raise ConfigParseError(msg)
+
+        return self._build_config(ini)
 
     def parse_file(self, file: TextIO) -> ParsedConfig:
         """Parse configuration from a file object.
@@ -178,7 +341,7 @@ class ConfidooConfigParser:
         """
         return self.parse(file.read())
 
-    def _build_config(self) -> ParsedConfig:
+    def _build_config(self, ini: ConfigParser) -> ParsedConfig:
         """Build ParsedConfig from the internal ConfigParser.
 
         Operations are processed in the order they appear in the file.
@@ -186,16 +349,17 @@ class ConfidooConfigParser:
         """
         config = ParsedConfig()
 
-        for section_name in self._parser.sections():
-            operation = self._parse_section(section_name)
+        for section_name in ini.sections():
+            operation = self._parse_section(ini, section_name)
             config.add_operation(operation)
 
         return config
 
-    def _parse_section(self, section_name: str) -> ConfigOperation:
+    def _parse_section(self, ini: ConfigParser, section_name: str) -> ConfigOperation:
         """Parse a single section.
 
         Args:
+            ini: INI parser holding the section
             section_name: Raw section name from INI file
 
         Returns:
@@ -209,7 +373,7 @@ class ConfidooConfigParser:
             msg = (
                 f"Invalid section name: {section_name!r}. "
                 f"Expected format: [type:identifier] where type is one of: "
-                f"model, record, config"
+                f"{', '.join(t.value for t in OperationType)}"
             )
             raise InvalidSectionError(msg)
 
@@ -220,50 +384,57 @@ class ConfidooConfigParser:
             msg = f"Empty identifier in section: {section_name!r}"
             raise InvalidSectionError(msg)
 
-        # Extract fields and special attributes
-        fields, table = self._extract_fields(section_name)
+        # Extract fields and the operation's special attributes
+        operation_class = OPERATION_CLASSES[operation_type]
+        fields, attrs = self._extract_fields(
+            ini, section_name, operation_class.attributes
+        )
 
-        if operation_type == OperationType.CONFIG and table is not None:
-            msg = f"Config sections cannot have _table attribute: {section_name!r}"
+        if missing := sorted(operation_class.required_attributes - attrs.keys()):
+            msg = f"Missing {', '.join(missing)} attribute in section: {section_name!r}"
             raise InvalidSectionError(msg)
 
-        operation_class = OPERATION_CLASSES[operation_type]
-        return operation_class(identifier=identifier, fields=fields, table=table)
+        kwargs = {
+            operation_class.attributes[key]: value for key, value in attrs.items()
+        }
+        return operation_class(identifier=identifier, fields=fields, **kwargs)
 
     def _extract_fields(
-        self, section_name: str
-    ) -> tuple[dict[str, str | None], str | None]:
-        """Extract fields and table attribute from a section.
+        self, ini: ConfigParser, section_name: str, attributes: Container[str]
+    ) -> tuple[dict[str, str | None], dict[str, str]]:
+        """Extract fields and special attributes from a section.
 
         Args:
+            ini: INI parser holding the section
             section_name: Section name to extract fields from
+            attributes: Special attributes supported by the section's operation.
+                Any other key, even starting with ``_``, is a regular field
 
         Returns:
-            Tuple of (fields_dict, table_name)
-            - fields_dict: Regular fields (excludes _table)
-            - table_name: Value of _table attribute, or None if not specified
+            Tuple of (fields_dict, attrs_dict)
+            - fields_dict: Regular fields (excludes special attributes)
+            - attrs_dict: Special attributes that are set
+
+        Raises:
+            InvalidSectionError: If a special attribute is empty
         """
         fields: dict[str, str | None] = {}
-        table: str | None = None
+        attrs: dict[str, str] = {}
 
-        for key, raw_value in self._parser.items(section_name):
+        for key, raw_value in ini.items(section_name):
             # None or blank value means empty assignment (e.g., "field =")
             value = (raw_value or "").strip() or None
 
-            # Handle special _table attribute
-            if key == RESERVED_TABLE_FIELD:
-                if value is None:
-                    msg = (
-                        f"_table attribute cannot be empty in section: {section_name!r}"
-                    )
-                    raise InvalidSectionError(msg)
-                table = value
-                continue
+            if key not in attributes:
+                # Regular fields store None to unset parameters
+                fields[key] = value
+            elif value is None:
+                msg = f"{key} attribute cannot be empty in section: {section_name!r}"
+                raise InvalidSectionError(msg)
+            else:
+                attrs[key] = value
 
-            # Store regular fields. None is used to unset parameters
-            fields[key] = value
-
-        return fields, table
+        return fields, attrs
 
 
 def parse_config(content: str) -> ParsedConfig:

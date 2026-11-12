@@ -14,6 +14,7 @@ from confidoo.config import (
     OperationType,
     ParsedConfig,
     RecordOperation,
+    SqlOperation,
     parse_config,
 )
 from confidoo.exceptions import ConfigParseError, InvalidSectionError
@@ -134,7 +135,7 @@ class TestParseConfigSection:
             "ribbon.name": "Test",
             "database.uuid": "0000-0000-0000-0000",
         }
-        assert operation.table is None
+        assert not hasattr(operation, "table")
 
     def test_parse_config_empty_values(self):
         """Test parsing empty values for unsetting parameters."""
@@ -150,17 +151,193 @@ class TestParseConfigSection:
         assert operation.fields["database.expiration_date"] is None
         assert operation.fields["database.expiration_reason"] is None
 
-    def test_parse_config_with_table_raises_error(self):
-        """Test error when config section has _table attribute."""
+    def test_parse_config_with_table_is_a_param(self):
+        """Test _table is a regular parameter in config sections."""
         config_text = textwrap.dedent(
             """
             [config:set_param]
-            _table = invalid
+            _table = value
             param = value
         """
         )
-        with pytest.raises(InvalidSectionError, match="cannot have _table attribute"):
+        operation = parse_config(config_text).operations[0]
+        assert operation.fields == {"_table": "value", "param": "value"}
+
+
+class TestParseSqlSection:
+    """Tests for parsing raw SQL sections."""
+
+    def test_parse_sql_with_params(self):
+        """Test parsing a multi-line query with named parameters."""
+        config_text = textwrap.dedent(
+            """
+            [sql:set-endpoint-apikey]
+            _query = UPDATE endpoint_endpoint
+                SET value = %(value)s
+                WHERE name = 'apikey'
+                  AND backend_id = (
+                    SELECT id FROM endpoint_backend WHERE tech_name = %(backend)s
+                  )
+            value = secret
+            backend = foo
+        """
+        )
+        config = parse_config(config_text)
+        assert len(config) == 1
+        operation = config.operations[0]
+        assert isinstance(operation, SqlOperation)
+        assert operation.identifier == "set-endpoint-apikey"
+        assert operation.fields == {"value": "secret", "backend": "foo"}
+        assert operation.query.startswith("UPDATE endpoint_endpoint\n")
+        assert "tech_name = %(backend)s" in operation.query
+        assert str(operation) == "sql:set-endpoint-apikey"
+
+    def test_parse_sql_without_params(self):
+        """Test parsing a query without parameters."""
+        config = parse_config(
+            "[sql:disable-crons]\n_query = UPDATE ir_cron SET active = false\n"
+        )
+        operation = config.operations[0]
+        assert isinstance(operation, SqlOperation)
+        assert operation.query == "UPDATE ir_cron SET active = false"
+        assert operation.fields == {}
+
+    def test_parse_sql_empty_param(self):
+        """Test that an empty parameter value is parsed as None (SQL NULL)."""
+        config_text = textwrap.dedent(
+            """
+            [sql:reset]
+            _query = UPDATE res_partner SET email = %(email)s
+            email =
+        """
+        )
+        operation = parse_config(config_text).operations[0]
+        assert operation.fields == {"email": None}
+
+    def test_parse_sql_escaped_percent(self):
+        """Test that an escaped literal '%%' is accepted."""
+        config_text = textwrap.dedent(
+            """
+            [sql:like]
+            _query = UPDATE res_partner SET email = %(email)s WHERE name LIKE 'foo%%'
+            email = foo@example.com
+        """
+        )
+        operation = parse_config(config_text).operations[0]
+        assert isinstance(operation, SqlOperation)
+        assert "LIKE 'foo%%'" in operation.query
+
+    def test_parse_multiple_sql_sections(self):
+        """Test that multiple sql sections are kept in order."""
+        config_text = textwrap.dedent(
+            """
+            [sql:first]
+            _query = SELECT 1
+
+            [model:ir.cron]
+            active = False
+
+            [sql:second]
+            _query = SELECT 2
+        """
+        )
+        config = parse_config(config_text)
+        assert [str(operation) for operation in config] == [
+            "sql:first",
+            "model:ir.cron",
+            "sql:second",
+        ]
+
+    @pytest.mark.parametrize(
+        ("config_text", "fields"),
+        [
+            ("[model:ir.cron]\n_query = foo\n", {"_query": "foo"}),
+            ("[record:base.a]\n_query = foo\n", {"_query": "foo"}),
+            ("[config:set_param]\n_query =\n", {"_query": None}),
+            ("[model:ir.cron]\n_other = foo\n", {"_other": "foo"}),
+        ],
+    )
+    def test_other_attributes_are_fields(self, config_text, fields):
+        """Test keys that aren't the operation's special attributes are fields."""
+        operation = parse_config(config_text).operations[0]
+        assert operation.fields == fields
+
+    @pytest.mark.parametrize(
+        ("config_text", "match"),
+        [
+            ("[sql:q]\nvalue = foo\n", "Missing _query attribute"),
+            ("[sql:q]\n_query =\n", "_query attribute cannot be empty"),
+            (
+                "[sql:q]\n_query = SELECT 1\n_table = foo\n",
+                r"Unused query parameter\(s\) _table",
+            ),
+            (
+                "[sql:q]\n_query = SELECT %(foo)s, %(bar)s\nfoo = 1\n",
+                r"Undefined query parameter\(s\) bar",
+            ),
+            ("[sql:q]\n_query = SELECT 1\nfoo = 1\n", "Unused query parameter"),
+            ("[sql:q]\n_query = SELECT %(Foo)s\nfoo = 1\n", "must be lowercase"),
+            ("[sql:q]\n_query = SELECT %()s\n", "Empty query parameter name"),
+            ("[sql:q]\n_query = SELECT %(n)i\nn = 1\n", r"Invalid placeholder %\(n\)i"),
+            ("[sql:q]\n_query = SELECT %(n)\nn = 1\n", r"Use %\(n\)s for a parameter"),
+            ("[sql:q]\n_query = SELECT %(n)d\n", r"Invalid XML ID reference %\(n\)d"),
+            ("[sql:q]\n_query = SELECT %(n)d\n", r"For a parameter, use %\(n\)s\."),
+            ("[sql:q]\n_query = SELECT %(base.)d\n", r"XML ID: %\(module\.name\)d\.$"),
+            ("[sql:q]\n_query = SELECT %(.x)d\n", "Invalid XML ID reference"),
+            ("[sql:q]\n_query = SELECT %(base.x)d\nx = 1\n", "Unused query parameter"),
+            ("[sql:q]\n_query = SELECT '%(x)s'\nx = 1\n", "Quoted query parameter"),
+            ("[sql:q]\n_query = SELECT '%(x)s\nx = 1\n", "Quoted query parameter"),
+            ('[sql:q]\n_query = SELECT %(x)s"\nx = 1\n', "Quoted query parameter"),
+            ("[sql:q]\n_query = SELECT %s\n", "Invalid '%'"),
+            (
+                "[sql:q]\n_query = SELECT %(foo\n    FROM t WHERE id IN (1)\n",
+                r"Invalid '%' in query of section: 'sql:q'\.",
+            ),
+            (
+                "[sql:q]\n_query = SELECT '%%(foo)s'\nfoo = 1\n",
+                "Unused query parameter",
+            ),
+            ("[sql:q]\n_query = SELECT 1 WHERE 'a' LIKE 'a%'\n", "Invalid '%'"),
+        ],
+    )
+    def test_parse_sql_invalid(self, config_text, match):
+        """Test invalid sql sections raise a descriptive error."""
+        with pytest.raises(InvalidSectionError, match=match):
             parse_config(config_text)
+
+    def test_parse_sql_xmlid_references(self):
+        """Test XML ID references need no parameter, and are rendered as ids."""
+        config_text = textwrap.dedent(
+            """
+            [sql:xmlid]
+            _query = UPDATE res_partner SET name = %(name)s
+                WHERE id IN (%(base.main_partner)d, %(base.partner_admin)d)
+                AND parent_id = %(base.main_partner)d AND ref LIKE 'x%%'
+            name = Foo
+        """
+        )
+        operation = parse_config(config_text).operations[0]
+        assert isinstance(operation, SqlOperation)
+        assert operation.fields == {"name": "Foo"}
+
+        resolved = []
+
+        def resolve_xmlid(xmlid):
+            resolved.append(xmlid)
+            return {"base.main_partner": 1, "base.partner_admin": 3}[xmlid]
+
+        assert operation.render_query(resolve_xmlid) == (
+            "UPDATE res_partner SET name = %(name)s\n"
+            "WHERE id IN (1, 3)\n"
+            "AND parent_id = 1 AND ref LIKE 'x%%'"
+        )
+        assert resolved == ["base.main_partner", "base.partner_admin"]
+
+    def test_parse_sql_undefined_lowercase_param_no_hint(self):
+        """Test the lowercase hint is only given for names with uppercase."""
+        with pytest.raises(InvalidSectionError) as exc_info:
+            parse_config("[sql:q]\n_query = SELECT %(foo)s\n")
+        assert "lowercase" not in str(exc_info.value)
 
 
 class TestOrderPreservation:
@@ -263,6 +440,35 @@ class TestErrorHandling:
         )
         with pytest.raises(ConfigParseError, match="Failed to parse INI content"):
             parse_config(config_text)
+
+    def test_default_section_keys(self):
+        """Test [DEFAULT] keys are rejected instead of merged into every section."""
+        config_text = textwrap.dedent(
+            """
+            [DEFAULT]
+            foo = bar
+
+            [model:ir.cron]
+            active = False
+        """
+        )
+        with pytest.raises(
+            ConfigParseError, match=r"\[DEFAULT\] sections aren't supported.*foo"
+        ):
+            parse_config(config_text)
+
+    def test_empty_default_section(self):
+        """Test an empty [DEFAULT] section is harmless."""
+        config = parse_config("[DEFAULT]\n\n[model:ir.cron]\nactive = False\n")
+        assert config.operations[0].fields == {"active": "False"}
+
+    def test_default_section_keys_not_kept_on_reuse(self):
+        """Test [DEFAULT] keys of a failed parse don't leak into the next one."""
+        parser = ConfidooConfigParser()
+        with pytest.raises(ConfigParseError):
+            parser.parse("[DEFAULT]\nfoo = bar\n")
+        config = parser.parse("[model:ir.cron]\nactive = False\n")
+        assert config.operations[0].fields == {"active": "False"}
 
     def test_unknown_section_type(self):
         """Test error on unknown section type."""
