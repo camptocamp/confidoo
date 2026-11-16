@@ -31,6 +31,15 @@ class OperationType(str, Enum):
     SQL = "sql"
 
 
+class OnMissing(str, Enum):
+    """What to do when a record section's record can't be found."""
+
+    # Raise, rolling back the whole configuration (the default)
+    FAIL = "fail"
+    # Log a warning and go on
+    WARNING = "warning"
+
+
 # Section pattern: [type:identifier]
 SECTION_PATTERN = re.compile(
     rf"^(?P<type>{'|'.join(t.value for t in OperationType)}):(?P<identifier>.+)$"
@@ -95,13 +104,80 @@ class ModelOperation(TableOperation):
 
 
 @dataclass(slots=True, frozen=True)
+class FieldSelector:
+    """Selects a record by a unique column: ``model:column=value``."""
+
+    pattern: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<model>[^:=\s]+):(?P<column>[^:=\s]+)\s*=\s*(?P<value>\S.*)$"
+    )
+
+    model: str
+    column: str
+    value: str
+
+    @classmethod
+    def parse(cls, identifier: str) -> FieldSelector:
+        """Parse a ``model:column=value`` record identifier.
+
+        Raises:
+            InvalidSectionError: If the identifier is malformed
+        """
+        if not (match := cls.pattern.match(identifier)):
+            msg = (
+                f"Invalid record identifier: {identifier!r}. "
+                f"Expected an XMLID or model:column=value"
+            )
+            raise InvalidSectionError(msg)
+        return cls(match["model"], match["column"], match["value"])
+
+
+@dataclass(slots=True, frozen=True)
 class RecordOperation(TableOperation):
     """Record-specific configuration operation.
 
-    Example: [record:customer_module.sftp_server]
+    The record is selected by its XMLID, or by a unique column when the
+    identifier is ``model:column=value`` (an XMLID contains neither ``:`` nor
+    ``=``, so the two forms are distinct). The ``_on_missing`` attribute sets
+    what happens when the record can't be found (see ``OnMissing``).
+
+    Examples:
+        [record:customer_module.sftp_server]
+        [record:res.partner:tech_name=my_partner]
     """
 
     operation_type: ClassVar[OperationType] = OperationType.RECORD
+    attributes: ClassVar[dict[str, str]] = {
+        **TableOperation.attributes,
+        "_on_missing": "on_missing",
+    }
+
+    on_missing: OnMissing = OnMissing.FAIL
+
+    # Set from a model:column=value identifier, None for an XMLID
+    selector: FieldSelector | None = field(init=False, default=None)
+
+    def _validate(self) -> None:
+        """Parse the field selector, and validate the _on_missing value.
+
+        The XMLID is checked when it's resolved.
+
+        Raises:
+            InvalidSectionError: If a model:column=value identifier is
+                malformed, or _on_missing is invalid
+        """
+        # An XMLID contains neither ':' nor '='
+        if ":" in self.identifier or "=" in self.identifier:
+            selector = FieldSelector.parse(self.identifier)
+            object.__setattr__(self, "selector", selector)
+        try:
+            object.__setattr__(self, "on_missing", OnMissing(self.on_missing))
+        except ValueError:
+            msg = (
+                f"Invalid _on_missing value {self.on_missing!r} in section "
+                f"{str(self)!r}. Expected one of: "
+                f"{', '.join(choice.value for choice in OnMissing)}"
+            )
+            raise InvalidSectionError(msg) from None
 
 
 @dataclass(slots=True, frozen=True)
@@ -283,6 +359,7 @@ class ConfidooConfigParser:
     Parses INI files with special section syntax:
     - [model:model_name] - Model-wide settings
     - [record:xml_id] - Record-specific settings
+    - [record:model:column=value] - Record selected by a unique field
     - [config:set_param] - System parameter settings
     - [sql:identifier] - Raw SQL query
 

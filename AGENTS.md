@@ -104,14 +104,25 @@ Represents model-wide settings that apply to all records of a model.
 - `table`: Optional custom database table name (via `_table` attribute)
 
 ##### `RecordOperation`
-Represents settings for a specific record identified by XML ID.
+Represents settings for a specific record, selected by XML ID or by a unique column.
 
-**Format**: `[record:xml_id]`
+**Format**: `[record:xml_id]` or `[record:model:column=value]`
 
 **Attributes:**
-- `identifier`: The XML ID of the record (e.g., "customer_module.sftp_server")
+- `identifier`: The XML ID of the record (e.g., "customer_module.sftp_server"), or a
+  `model:column=value` field selector (e.g., "res.partner:tech_name=my_partner")
 - `fields`: Dictionary of field names to values
 - `table`: Optional custom database table name (via `_table` attribute)
+- `on_missing`: What to do when the record can't be found (via `_on_missing`: `fail`, the
+  default, or `warning`), converted to the `OnMissing` enum in `_validate()`
+- `selector`: `FieldSelector` (`model`, `column`, `value`), built by
+  `FieldSelector.parse()` in `_validate()` when the identifier contains `:` or `=` (an
+  XMLID contains neither), `None` for an XMLID. Not an init argument
+
+Applied by `_apply_record_operation()` (see below). A missing record (unknown XMLID, an
+XMLID whose row is gone, or no row matching the selector) raises
+`XmlIdNotFoundError` / `RecordNotFoundError` with `fail`, or logs a warning with
+`warning`. More than 1 matching row always raises `AmbiguousRecordError`.
 
 ##### `ConfigParamOperation`
 Represents system parameter configuration.
@@ -224,7 +235,12 @@ Confidoo(
 
 - **`_apply_operation(operation)`**: Dispatcher based on operation type (isinstance checks)
 - **`_apply_model_operation(operation)`**: Executes `UPDATE table SET fields` for all records
-- **`_apply_record_operation(operation)`**: Resolves XMLID, then `UPDATE table SET fields WHERE id = res_id`
+- **`_apply_record_operation(operation)`**: Gets `(table, id)` from `_find_record()`, then
+  `UPDATE table SET fields WHERE id = res_id`, and applies the `_on_missing` policy to
+  `XmlIdNotFoundError` / `RecordNotFoundError` in one place. `_find_record()` resolves
+  the XMLID, or for a field selector runs `SELECT id ... LIMIT 2` before any write, so
+  a missing or ambiguous record changes nothing. A stale XMLID is detected by the
+  UPDATE's rowcount
 - **`_apply_config_param_operation(operation)`**: For each parameter:
   - Empty value: `DELETE FROM ir_config_parameter WHERE key = %s`
   - Non-empty: `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL UPSERT)
@@ -301,6 +317,7 @@ Custom exception classes for error handling:
 - **`DatabaseConnectionError`**: Connection to database failed
 - **`NotOdooDatabaseError`**: Database validation failed (missing `ir_module_module` table)
 - **`OdooVersionError`**: Version detection failed (no longer raised; version detection is non-fatal. Kept for backwards compatibility)
+- **`RecordNotFoundError`** / **`AmbiguousRecordError`**: a `record:` section matched 0 / more than 1 rows
 - **`XmlIdNotFoundError`**: XMLID resolution failed (record not found in `ir_model_data`)
 - **`TransactionError`**: Transaction operation failed
 
@@ -379,7 +396,9 @@ The complete flow from configuration file to database commit:
 │    SET fields           │
 │                         │
 │  RecordOperation →      │
-│    resolve_xmlid()      │
+│    resolve_xmlid(), or  │
+│    SELECT id WHERE      │
+│    column = value       │
 │    UPDATE table         │
 │    SET fields           │
 │    WHERE id = res_id    │
