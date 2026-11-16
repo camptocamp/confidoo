@@ -10,6 +10,7 @@ import pytest
 from confidoo.config import (
     ConfidooConfigParser,
     ConfigParamOperation,
+    FieldSelector,
     ModelOperation,
     OperationType,
     ParsedConfig,
@@ -79,6 +80,12 @@ class TestParseModelSection:
 class TestParseRecordSection:
     """Tests for parsing record sections."""
 
+    def test_parse_xmlid_has_no_selector(self):
+        """Test that an XMLID record section has no field selector."""
+        operation = parse_config("[record:a.b]\nx = 1\n").operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.selector is None
+
     def test_parse_simple_record(self):
         """Test parsing a simple record section."""
         config_text = textwrap.dedent(
@@ -111,6 +118,74 @@ class TestParseRecordSection:
         assert isinstance(operation, RecordOperation)
         assert operation.table == "custom_table"
         assert "_table" not in operation.fields
+
+
+def test_parse_on_missing_is_a_field_outside_record_sections():
+    """Test that _on_missing is a regular field in other sections."""
+    model = parse_config("[model:a.b]\n_on_missing = fail\n").operations[0]
+    assert model.fields == {"_on_missing": "fail"}
+
+
+class TestParseFieldSection:
+    """Tests for parsing field sections."""
+
+    def test_parse_simple_field(self):
+        """Test parsing a field section."""
+        config = parse_config("[record:res.partner:tech_name=my_partner]\nname = X\n")
+        operation = config.operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.operation_type == OperationType.RECORD
+        assert operation.selector == FieldSelector(
+            "res.partner", "tech_name", "my_partner"
+        )
+        assert operation.fields == {"name": "X"}
+
+    def test_parse_field_spaces_around_equal(self):
+        """Test that spaces around '=' are stripped."""
+        operation = parse_config("[record:m.m:k = v]\nx = 1\n").operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.selector == FieldSelector("m.m", "k", "v")
+
+    def test_parse_field_value_with_separators(self):
+        """Test that the value may contain ':' and '='."""
+        config = parse_config("[record:ir.model:name=a:b=c]\nx = 1\n")
+        operation = config.operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.selector == FieldSelector("ir.model", "name", "a:b=c")
+
+    def test_parse_field_with_table(self):
+        """Test parsing field section with custom table."""
+        config = parse_config("[record:m.m:k=v]\n_table = custom\nx = 1\n")
+        operation = config.operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.table == "custom"
+
+    @pytest.mark.parametrize("identifier", ["a.b", "m.m:k=v"])
+    def test_parse_on_missing(self, identifier):
+        """Test _on_missing parsing and its default, for both identifier forms."""
+        default = parse_config(f"[record:{identifier}]\nx = 1\n").operations[0]
+        assert isinstance(default, RecordOperation)
+        assert default.on_missing == "fail"
+        config = parse_config(f"[record:{identifier}]\n_on_missing = warning\nx = 1\n")
+        operation = config.operations[0]
+        assert isinstance(operation, RecordOperation)
+        assert operation.on_missing == "warning"
+        assert operation.fields == {"x": "1"}
+
+    @pytest.mark.parametrize("identifier", ["a.b", "m.m:k=v"])
+    @pytest.mark.parametrize("value", ["nope", "error", ""])
+    def test_parse_on_missing_invalid(self, identifier, value):
+        """Test that an invalid or empty _on_missing is rejected."""
+        with pytest.raises(InvalidSectionError, match="_on_missing"):
+            parse_config(f"[record:{identifier}]\n_on_missing = {value}\n")
+
+    @pytest.mark.parametrize(
+        "section", ["res.partner:tech_name", "res.partner:=v", ":k=v"]
+    )
+    def test_parse_field_invalid_identifier(self, section):
+        """Test that malformed identifiers are rejected."""
+        with pytest.raises(InvalidSectionError, match="Invalid record identifier"):
+            parse_config(f"[record:{section}]\nx = 1\n")
 
 
 class TestParseConfigSection:

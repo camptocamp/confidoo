@@ -19,11 +19,17 @@ from .config import (
     ConfigOperation,
     ConfigParamOperation,
     ModelOperation,
+    OnMissing,
     RecordOperation,
     SqlOperation,
     parse_config,
 )
 from .db import ConnectionParams, OdooDatabase
+from .exceptions import (
+    AmbiguousRecordError,
+    RecordNotFoundError,
+    XmlIdNotFoundError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -294,33 +300,87 @@ class Confidoo:
         logger.info("✓ Updated %d row(s)", rowcount)
 
     def _apply_record_operation(self, operation: RecordOperation) -> None:
-        """Apply settings to a specific record by XMLID.
+        """Apply settings to a specific record, by XMLID or unique field.
+
+        A missing record (unknown XMLID, XMLID whose row is gone, or no row
+        matching the field) raises with ``_on_missing = fail``, or logs a
+        warning with ``_on_missing = warning``.
 
         Args:
             operation: Record operation to apply
 
-        Example:
+        Raises:
+            XmlIdNotFoundError: If the XMLID is unknown and on_missing is "fail"
+            RecordNotFoundError: If no row matches and on_missing is "fail"
+            AmbiguousRecordError: If more than one row matches (nothing is
+                updated)
+
+        Examples:
             [record:base.user_admin]
             login = administrator
             -> UPDATE res_users SET login = 'administrator' WHERE id = 2
+
+            [record:res.partner:tech_name=my_partner]
+            name = My Partner
+            -> SELECT id FROM res_partner WHERE tech_name = 'my_partner'
+            -> UPDATE res_partner SET name = 'My Partner' WHERE id = <id>
         """
         if not operation.fields:
             return  # Nothing to update
 
-        # Resolve table name from the XMLID model, not the operation identifier
-        model, res_id = self.db.resolve_xmlid(operation.identifier)
-        table = operation.table or self.db.resolve_table_name(model)
-
-        if not self._update(table, operation.fields, res_id):
-            logger.warning(
-                "XMLID %s resolved to %s,%s but no row was found in table %s",
-                operation.identifier,
-                model,
-                res_id,
-                table,
-            )
+        try:
+            table, res_id = self._find_record(operation)
+            if not self._update(table, operation.fields, res_id):
+                msg = (
+                    f"XMLID {operation.identifier} resolved to id {res_id} "
+                    f"but no row was found in table {table}"
+                )
+                raise RecordNotFoundError(msg)
+        except (XmlIdNotFoundError, RecordNotFoundError) as exc:
+            if operation.on_missing == OnMissing.FAIL:
+                raise
+            logger.warning("%s", exc)
             return
         logger.info("✓ Updated")
+
+    def _find_record(self, operation: RecordOperation) -> tuple[str, int]:
+        """Find the table and id of the record targeted by a record operation.
+
+        A field selector's row is selected before updating, so that an
+        ambiguous match changes nothing even if the caller catches the error
+        and commits. An XMLID's row isn't checked: the UPDATE's rowcount is.
+
+        Args:
+            operation: Record operation to find the record of
+
+        Returns:
+            Tuple of (table, id)
+
+        Raises:
+            XmlIdNotFoundError: If the XMLID is unknown
+            RecordNotFoundError: If no row matches the field selector
+            AmbiguousRecordError: If more than one row matches it
+        """
+        selector = operation.selector
+        if selector is None:
+            model, res_id = self.db.resolve_xmlid(operation.identifier)
+            # Resolve table name from the XMLID model, not the operation identifier
+            return operation.table or self.db.resolve_table_name(model), res_id
+
+        table = operation.table or self.db.resolve_table_name(selector.model)
+        query = sql.SQL("SELECT id FROM {} WHERE {} = %s LIMIT 2").format(
+            sql.Identifier(table), sql.Identifier(selector.column)
+        )
+        self.db.cr.execute(query, (selector.value,))
+        rows = self.db.cr.fetchall()
+        where = f"{selector.column} = {selector.value!r}"
+        if not rows:
+            msg = f"No record found in {table} where {where}"
+            raise RecordNotFoundError(msg)
+        if len(rows) > 1:
+            msg = f"{where} matched more than one record in {table}, expected one"
+            raise AmbiguousRecordError(msg)
+        return table, rows[0]["id"]
 
     def _apply_config_param_operation(self, operation: ConfigParamOperation) -> None:
         """Apply system parameters (INSERT or UPDATE or DELETE).

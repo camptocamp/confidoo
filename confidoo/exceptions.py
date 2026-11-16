@@ -36,5 +36,13 @@ class XmlIdNotFoundError(DatabaseError):
     """Raised when XMLID cannot be resolved."""
 
 
+class RecordNotFoundError(DatabaseError):
+    """Raised when a record selected by a unique field does not exist."""
+
+
+class AmbiguousRecordError(DatabaseError):
+    """Raised when a unique field selects more than one record."""
+
+
 class TransactionError(DatabaseError):
     """Raised when transaction operations fail."""
